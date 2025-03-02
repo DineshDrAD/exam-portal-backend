@@ -33,6 +33,9 @@ const QuestionSchema = new mongoose.Schema({
     type: [String], // Can store correct answers for MCQ, MSQ, Fill in the Blanks
     required: true,
   },
+},
+{
+  timestamps: true,
 });
 
 module.exports = mongoose.model("Question", QuestionSchema);
