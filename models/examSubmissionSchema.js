@@ -42,6 +42,18 @@ const ExamSubmissionSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    reviews: [
+      {
+        evaluator: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          required: true,
+        },
+        message: {
+          type: String,
+        },
+      },
+    ],
   },
   { timestamps: true }
 );

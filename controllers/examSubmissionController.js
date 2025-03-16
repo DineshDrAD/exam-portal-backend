@@ -5,6 +5,50 @@ const userModel = require("../models/UserModel");
 const userPassSchema = require("../models/userPassSchema");
 const sendMail = require("../utils/sendMail");
 
+const getAllPassedSubmission = async (req, res) => {
+  try {
+    const passedData = await examSubmissionSchema
+      .find({
+        pass: true,
+      })
+      .populate({
+        path: "examId",
+        select: "subject subTopic level examCode passPercentage",
+        populate: {
+          path: "subject",
+          select: "name",
+        },
+      })
+      .populate("userId");
+
+    for (let submission of passedData) {
+      if (
+        submission.examId &&
+        submission.examId.subject &&
+        submission.examId.subTopic
+      ) {
+        const subject = await mongoose
+          .model("Subject")
+          .findById(submission.examId.subject._id);
+
+        const subtopic = subject.subtopics.id(submission.examId.subTopic);
+
+        if (subtopic) {
+          submission.examId._doc.subTopicName = subtopic.name;
+        }
+      }
+    }
+
+    res.status(200).json(passedData);
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Unable to get the data",
+      error: error.message,
+    });
+  }
+};
+
 const getPassedSubmissionForUser = async (req, res) => {
   try {
     const userId = req.params.userId;
@@ -48,6 +92,51 @@ const getPassedSubmissionForUser = async (req, res) => {
     }
 
     res.status(200).json(passedData);
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Unable to get the data",
+      error: error.message,
+    });
+  }
+};
+
+const getAllPreviousAttempt = async (req, res) => {
+  try {
+    const previousAttemptData = await examSubmissionSchema
+      .find({
+        pass: false,
+      })
+      .populate({
+        path: "examId",
+        select: "subject subTopic level examCode passPercentage",
+        populate: {
+          path: "subject",
+          select: "name",
+        },
+      })
+      .populate("userId")
+      .sort({ createdAt: -1 });
+
+    for (let submission of previousAttemptData) {
+      if (
+        submission.examId &&
+        submission.examId.subject &&
+        submission.examId.subTopic
+      ) {
+        const subject = await mongoose
+          .model("Subject")
+          .findById(submission.examId.subject._id);
+
+        const subtopic = subject.subtopics.id(submission.examId.subTopic);
+
+        if (subtopic) {
+          submission.examId._doc.subTopicName = subtopic.name;
+        }
+      }
+    }
+
+    res.status(200).json(previousAttemptData);
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -140,6 +229,13 @@ const getExamSubmissionById = async (req, res) => {
         select: "questionType questionText options",
         populate: {
           path: "questionId",
+        },
+      })
+      .populate({
+        path: "reviews",
+        populate: {
+          path: "evaluator",
+          select: "username email",
         },
       });
 
@@ -368,9 +464,135 @@ const submitExam = async (req, res) => {
   }
 };
 
+const submitReviewForExamSubmission = async (req, res) => {
+  try {
+    const { examSubmissionId, userId, message } = req.body;
+
+    if (!examSubmissionId || !userId || !message) {
+      return res.status(500).json({
+        success: false,
+        message: "Need the evaluator Id, Exam Submission Id and the message",
+      });
+    }
+
+    const updatedExamSubmission = await examSubmissionSchema
+      .findByIdAndUpdate(
+        examSubmissionId,
+        { $push: { reviews: { evaluator: userId, message } } },
+        { new: true }
+      )
+      .populate("reviews.evaluator", "username email");
+
+    if (!updatedExamSubmission) {
+      return res.status(404).json({
+        success: false,
+        message: "Exam Submission not found",
+      });
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: "Added the Comment Successfully",
+      examSubmission: updatedExamSubmission,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Unable to add comment for the exam",
+    });
+  }
+};
+
+const updateCommentInExamSubmission = async (req, res) => {
+  try {
+    const { examId, reviewId } = req.params;
+    const { message } = req.body;
+
+    if (!examId || !reviewId || !message) {
+      return res.status(400).json({
+        success: false,
+        message: "The Exam, Review Id and Message is needed",
+      });
+    }
+
+    const updatedComment = await examSubmissionSchema
+      .findOneAndUpdate(
+        { _id: examId, "reviews._id": reviewId },
+        { $set: { "reviews.$.message": message } },
+        { new: true }
+      )
+      .populate("reviews.evaluator", "username email");
+
+    if (!updatedComment) {
+      return res.status(404).json({
+        success: false,
+        message: "Exam Submission not found",
+      });
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: "Updated the Comment Successfully",
+      examSubmission: updatedComment,
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({
+      success: false,
+      message: "Unable to update the Comment",
+    });
+  }
+};
+
+const deleteCommentInExamSubmission = async (req, res) => {
+  try {
+    const { examId, reviewId } = req.params;
+
+    if (!examId || !reviewId) {
+      return res.status(500).json({
+        success: false,
+        message: "The Exam and Review Id is needed",
+      });
+    }
+
+    const deletedComment = await examSubmissionSchema
+      .findByIdAndUpdate(
+        examId,
+        { $pull: { reviews: { _id: reviewId } } },
+        { new: true }
+      )
+      .populate("reviews.evaluator", "username email");
+
+    if (!deletedComment) {
+      return res.status(404).json({
+        success: false,
+        message: "Exam Submission not found",
+      });
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: "Deleted the Comment Successfully",
+      examSubmission: deletedComment,
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({
+      success: false,
+      message: "Unable to delete the Comment",
+    });
+  }
+};
+
 module.exports = {
+  getAllPassedSubmission,
   getPassedSubmissionForUser,
+  getAllPreviousAttempt,
   getPreviousAttemptForUser,
   getExamSubmissionById,
   submitExam,
+  submitReviewForExamSubmission,
+  updateCommentInExamSubmission,
+  deleteCommentInExamSubmission,
 };
