@@ -3,11 +3,17 @@ const examModel = require("../models/examModel");
 
 const checkExamEligibility = async (req, res, next) => {
   try {
-    const { userId } = req.params; // Assuming userId is in params
+    const { userId } = req.body;
     const { examCode } = req.body; // Assuming examCode is sent in the request body
 
     // Find the exam details
-    const exam = await examModel.findOne({ examCode }).lean();
+    const exam = await examModel
+      .findOne({ examCode })
+      .populate({
+        path: "questions",
+        select: "-correctAnswers", // Exclude correctAnswers field
+      })
+      .lean();
     if (!exam) {
       return res.status(404).json({
         success: false,

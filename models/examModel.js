@@ -9,7 +9,6 @@ const examSchema = new mongoose.Schema(
     },
     subTopic: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Subtopic",
       required: true,
     },
     questions: [
@@ -32,6 +31,10 @@ const examSchema = new mongoose.Schema(
       type: String,
       unique: true,
       required: true,
+    },
+    passPercentage: {
+      type: Number,
+      default: 0,
     },
   },
   {

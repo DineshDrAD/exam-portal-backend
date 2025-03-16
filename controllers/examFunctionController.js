@@ -73,6 +73,7 @@ const getEligibleExamForUser = async (req, res) => {
         updatedAt: exam.updatedAt,
         __v: exam.__v,
         examCode: exam.examCode,
+        passPercentage: exam.passPercentage,
       };
     });
 

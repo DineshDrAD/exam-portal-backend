@@ -8,7 +8,6 @@ const QuestionSchema = new mongoose.Schema({
   },
   subTopic: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "Subtopic",
     required: true,
   },
   level: {

@@ -3,6 +3,8 @@ const { connectWithRetry } = require("./config/db");
 const app = express();
 require("dotenv").config();
 const cors = require("cors");
+const { transporter } = require("./utils/MailTransporter");
+const examSubmissionSchema = require("./models/examSubmissionSchema");
 const PORT = process.env.PORT || 4000;
 
 connectWithRetry();
@@ -20,6 +22,8 @@ app.use("/api/users", require("./routes/userRoute"));
 app.use("/api/subjects", require("./routes/subjectRoute"));
 app.use("/api/exams", require("./routes/examRoute"));
 app.use("/api/exam-function", require("./routes/examFunctionRoute"));
+app.use("/api/exam-submission", require("./routes/examSubmissionRoute"));
+app.use("/api/admin", require("./routes/adminRoute"));
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);

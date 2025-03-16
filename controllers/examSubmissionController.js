@@ -1,0 +1,376 @@
+const { default: mongoose } = require("mongoose");
+const examModel = require("../models/examModel");
+const examSubmissionSchema = require("../models/examSubmissionSchema");
+const userModel = require("../models/UserModel");
+const userPassSchema = require("../models/userPassSchema");
+const sendMail = require("../utils/sendMail");
+
+const getPassedSubmissionForUser = async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required",
+      });
+    }
+
+    const passedData = await examSubmissionSchema
+      .find({
+        userId: userId,
+        pass: true,
+      })
+      .populate({
+        path: "examId",
+        select: "subject subTopic level examCode passPercentage",
+        populate: {
+          path: "subject",
+          select: "name",
+        },
+      });
+
+    for (let submission of passedData) {
+      if (
+        submission.examId &&
+        submission.examId.subject &&
+        submission.examId.subTopic
+      ) {
+        const subject = await mongoose
+          .model("Subject")
+          .findById(submission.examId.subject._id);
+
+        const subtopic = subject.subtopics.id(submission.examId.subTopic);
+
+        if (subtopic) {
+          submission.examId._doc.subTopicName = subtopic.name;
+        }
+      }
+    }
+
+    res.status(200).json(passedData);
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Unable to get the data",
+      error: error.message,
+    });
+  }
+};
+
+const getPreviousAttemptForUser = async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required",
+      });
+    }
+
+    const previousAttemptData = await examSubmissionSchema
+      .find({
+        userId: userId,
+        pass: false,
+      })
+      .populate({
+        path: "examId",
+        select: "subject subTopic level examCode passPercentage",
+        populate: {
+          path: "subject",
+          select: "name",
+        },
+      })
+      .sort({ createdAt: -1 });
+
+    for (let submission of previousAttemptData) {
+      if (
+        submission.examId &&
+        submission.examId.subject &&
+        submission.examId.subTopic
+      ) {
+        const subject = await mongoose
+          .model("Subject")
+          .findById(submission.examId.subject._id);
+
+        const subtopic = subject.subtopics.id(submission.examId.subTopic);
+
+        if (subtopic) {
+          submission.examId._doc.subTopicName = subtopic.name;
+        }
+      }
+    }
+
+    res.status(200).json(previousAttemptData);
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Unable to get the data",
+      error: error.message,
+    });
+  }
+};
+
+const getExamSubmissionById = async (req, res) => {
+  try {
+    const examSubmissionId = req.params.examSubmissionId;
+
+    // Validate ID format before querying
+    if (
+      !examSubmissionId ||
+      !mongoose.Types.ObjectId.isValid(examSubmissionId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid exam submission ID",
+      });
+    }
+
+    const examSubmissionData = await examSubmissionSchema
+      .findById(examSubmissionId)
+      .populate({
+        path: "examId",
+        select: "subject subTopic level examCode passPercentage",
+        populate: {
+          path: "subject",
+          select: "name",
+        },
+      })
+      .populate({
+        path: "examData",
+        select: "questionType questionText options",
+        populate: {
+          path: "questionId",
+        },
+      });
+
+    if (!examSubmissionData) {
+      return res.status(404).json({
+        success: false,
+        message: "Exam submission not found",
+      });
+    }
+
+    // Check if examId, subject, and subTopic exist before accessing them
+    if (
+      examSubmissionData.examId &&
+      examSubmissionData.examId.subject &&
+      examSubmissionData.examId.subTopic
+    ) {
+      const subject = await mongoose
+        .model("Subject")
+        .findById(examSubmissionData.examId.subject._id);
+
+      if (subject && subject.subtopics) {
+        const subtopic = subject.subtopics.id(
+          examSubmissionData.examId.subTopic
+        );
+
+        if (subtopic) {
+          // Create _doc property if it doesn't exist
+          if (!examSubmissionData.examId._doc) {
+            examSubmissionData.examId._doc = {};
+          }
+          examSubmissionData.examId._doc.subTopicName = subtopic.name;
+        }
+      }
+    }
+
+    return res.status(200).json(examSubmissionData);
+  } catch (error) {
+    console.error("Error getting exam submission:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Unable to get the data",
+      error: error.message,
+    });
+  }
+};
+
+const submitExam = async (req, res) => {
+  try {
+    const { submissionData } = req.body;
+    let studentObtainedMarks = 0;
+
+    if (!submissionData || !submissionData.userId || !submissionData.examId) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid submission data" });
+    }
+
+    const previousAttemptNumber = await examSubmissionSchema.countDocuments({
+      userId: submissionData.userId,
+      examId: submissionData.examId,
+    });
+
+    // Fetch exam details along with questions
+    let examDetails = await examModel
+      .findById(submissionData.examId)
+      .populate({
+        path: "subject",
+        select: "name subtopics", // Fetch subtopics along with subject name
+      })
+      .populate("questions");
+
+    if (examDetails && examDetails.subject) {
+      // Find the specific subtopic within the subject
+      const subtopic = examDetails.subject.subtopics.find((sub) =>
+        sub._id.equals(examDetails.subTopic)
+      );
+
+      // Attach subtopic name manually
+      examDetails = examDetails.toObject(); // Convert Mongoose document to plain object
+      examDetails.subTopic = subtopic ? subtopic._id : examDetails.subTopic;
+      examDetails.subTopic.name = subtopic ? subtopic.name : null;
+    }
+
+    if (!examDetails) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Exam not found" });
+    }
+
+    // Define marking scheme based on level
+    let positiveMark = 1,
+      negativeMark = 0.33;
+
+    if (examDetails.level === 3) {
+      positiveMark = 2;
+      negativeMark = 0.66;
+    } else if (examDetails.level === 4) {
+      positiveMark = 10;
+      negativeMark = 0; // No negative marks
+    }
+
+    const enhancedExamData = submissionData.examData.map((studQuestion) => {
+      const question = examDetails.questions.find(
+        (q) => q._id.toString() === studQuestion.questionId
+      );
+
+      if (!question) return studQuestion;
+
+      return {
+        ...studQuestion,
+        correctAnswer: question.correctAnswers,
+      };
+    });
+
+    submissionData.examData.forEach((studQuestion) => {
+      const question = examDetails.questions.find(
+        (q) => q._id.toString() === studQuestion.questionId
+      );
+
+      if (!question) return; // Skip if question ID not found
+
+      const { questionType, correctAnswers } = question;
+      const studentAnswer = studQuestion.studentAnswer;
+
+      if (questionType === "MCQ" || questionType === "Fill in the Blanks") {
+        // Single correct answer case
+        if (correctAnswers.includes(studentAnswer?.toLowerCase())) {
+          studentObtainedMarks += positiveMark;
+        } else {
+          studentObtainedMarks -= negativeMark;
+        }
+      } else if (questionType === "MSQ") {
+        // Multiple Select Questions - Partial grading
+        const correctSet = new Set(correctAnswers);
+        const studentSet = new Set(studentAnswer);
+        let correctCount = 0,
+          incorrectCount = 0;
+
+        studentSet.forEach((ans) => {
+          if (correctSet.has(ans)) {
+            correctCount++;
+          } else {
+            incorrectCount++;
+          }
+        });
+
+        const totalCorrect = correctSet.size;
+        studentObtainedMarks += (correctCount / totalCorrect) * positiveMark; // Partial marking
+        studentObtainedMarks -= incorrectCount * negativeMark; // Negative marking for wrong choices
+      } else if (questionType === "Short Answer") {
+        // Marks based on keyword matching
+        let keywordMatches = correctAnswers.filter((word) =>
+          studentAnswer?.toLowerCase().includes(word?.toLowerCase())
+        ).length;
+
+        if (keywordMatches > 0) {
+          studentObtainedMarks +=
+            (keywordMatches / correctAnswers.length) * positiveMark; // Partial grading
+        } else {
+          studentObtainedMarks -= negativeMark; // Negative mark for no match
+        }
+      }
+    });
+
+    const passMark =
+      (examDetails.passPercentage / 100) * examDetails.questions.length;
+
+    // Store exam submission in the database
+    const submittedData = await examSubmissionSchema.create({
+      userId: submissionData.userId,
+      examId: submissionData.examId,
+      attemptNumber: previousAttemptNumber + 1,
+      obtainedMark: studentObtainedMarks.toFixed(2),
+      examData: enhancedExamData,
+      pass: studentObtainedMarks >= passMark,
+    });
+
+    if (previousAttemptNumber >= 5 && passMark > studentObtainedMarks) {
+      const evaluators = await userModel
+        .find({ role: "evaluator" })
+        .select("email");
+      const evaluatorEmails = evaluators.map((e) => e.email);
+
+      if (evaluatorEmails.length > 0) {
+        const userDetail = await userModel.findById(submissionData.userId);
+
+        const subject = `Student Repeated Exam Attempts: ${userDetail.username}`;
+        const text = `The user ${userDetail.username} (Email: ${userDetail.email}) has attempted the exam ${previousAttemptNumber} times but has not yet passed. Exam Details: Subject - ${examDetails.subject.name}, Subtopic - ${examDetails.subTopic.name}, Level - ${examDetails.level}.`;
+        const html = `
+          <h2>Exam Attempt Alert</h2>
+          <p>The student <strong>${userDetail.username}</strong> has attempted the exam <strong>${previousAttemptNumber} times</strong> but has not yet passed.</p>
+          <h3>Exam Details:</h3>
+          <ul>
+            <li><strong>Subject:</strong> ${examDetails.subject.name}</li>
+            <li><strong>Subtopic:</strong> ${examDetails.subTopic.name}</li>
+            <li><strong>Level:</strong> ${examDetails.level}</li>
+          </ul>
+          <p>Please review the student's progress.</p>
+        `;
+
+        await sendMail(evaluatorEmails, subject, text, html);
+      }
+    }
+
+    if (studentObtainedMarks >= passMark) {
+      await userPassSchema.create({
+        userId: submissionData.userId,
+        subject: examDetails.subject,
+        subTopic: examDetails.subTopic,
+        level: examDetails.level,
+        pass: true,
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Exam submitted successfully",
+      submittedData: submittedData,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Unable to submit the exam",
+    });
+  }
+};
+
+module.exports = {
+  getPassedSubmissionForUser,
+  getPreviousAttemptForUser,
+  getExamSubmissionById,
+  submitExam,
+};

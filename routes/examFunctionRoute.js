@@ -11,6 +11,7 @@ router.post("/attend-exam", checkExamEligibility, (req, res) => {
   res.status(200).json({
     success: true,
     message: "You are eligible to attend this exam.",
+    exam: req.exam,
   });
 });
 

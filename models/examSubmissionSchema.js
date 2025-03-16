@@ -25,18 +25,25 @@ const ExamSubmissionSchema = new mongoose.Schema(
           ref: "Question",
           required: true,
         },
-        answer: {
+        studentAnswer: {
           type: mongoose.Schema.Types.Mixed, // Supports multiple answer types
-          required: true,
+          // required: true,
+        },
+        correctAnswer: {
+          type: mongoose.Schema.Types.Mixed, // Supports multiple answer types
         },
       },
     ],
+    obtainedMark: {
+      type: Number,
+      default: 0,
+    },
     pass: {
       type: Boolean,
       default: false,
     },
   },
-  { timestamps: true } // Automatically adds `createdAt` and `updatedAt`
+  { timestamps: true }
 );
 
 ExamSubmissionSchema.index({ userId: 1, examId: 1 });

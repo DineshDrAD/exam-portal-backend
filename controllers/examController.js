@@ -28,9 +28,17 @@ const generateUniqueExamCode = async () => {
 
 const createExam = async (req, res) => {
   try {
-    const { subject, subTopic, level, status, questions } = req.body;
+    const { subject, subTopic, level, status, questions, passPercentage } =
+      req.body;
 
-    if (!subject || !subTopic || !level || !status || !questions) {
+    if (
+      !subject ||
+      !subTopic ||
+      !level ||
+      !status ||
+      !questions ||
+      !passPercentage
+    ) {
       return res.status(400).json({ error: "All fields are required" });
     }
 
@@ -55,6 +63,7 @@ const createExam = async (req, res) => {
       subTopic,
       level,
       status,
+      passPercentage,
       examCode,
       questions: createdQuestions.map((q) => q._id),
     });
@@ -94,6 +103,7 @@ const getAllExams = async (req, res) => {
           level: exam.level,
           status: exam.status,
           questions: exam.questions,
+          passPercentage: exam.passPercentage,
           examCode: exam.examCode,
         };
       })
@@ -129,6 +139,7 @@ const getAllExamWithoutCorrectAnswers = async (req, res) => {
           subTopicId: subTopic?._id,
           level: exam.level,
           status: exam.status,
+          passPercentage: exam.passPercentage,
           questions,
           examCode: exam.examCode,
         };
@@ -144,7 +155,8 @@ const getAllExamWithoutCorrectAnswers = async (req, res) => {
 const updateExam = async (req, res) => {
   try {
     const examId = req.params.id; // Get examId from params
-    const { subject, subTopic, level, status, questions } = req.body;
+    const { subject, subTopic, level, status, questions, passPercentage } =
+      req.body;
 
     // Validate required fields
     if (!subject || !subTopic || !level || !status || !questions) {
@@ -196,6 +208,7 @@ const updateExam = async (req, res) => {
     }
 
     // Update the exam with the new/updated questions
+    exam.passPercentage = passPercentage || exam.passPercentage;
     exam.questions = updatedQuestions;
 
     await exam.save();
@@ -209,6 +222,36 @@ const updateExam = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to update exam",
+      error: error.message,
+    });
+  }
+};
+
+const getAllExamDetailsWithoutAnswer = async (req, res) => {
+  try {
+    const { examCode } = req.params;
+
+    // Find the exam with the given examCode and populate questions, excluding correctAnswers
+    const exam = await examModel.findOne({ examCode }).populate({
+      path: "questions",
+      select: "-correctAnswers", // Exclude correctAnswers field
+    });
+
+    if (!exam) {
+      return res.status(404).json({
+        success: false,
+        message: "Exam not found with the provided exam code",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      exam,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch exam details",
       error: error.message,
     });
   }
@@ -242,6 +285,7 @@ const getExamById = async (req, res) => {
         status: exam.status,
         questions: exam.questions,
         examCode: exam.examCode,
+        passPercentage: exam.passPercentage,
       };
     };
 
@@ -293,6 +337,7 @@ const deleteExam = async (req, res) => {
 module.exports = {
   createExam,
   getAllExams,
+  getAllExamDetailsWithoutAnswer,
   getAllExamWithoutCorrectAnswers,
   updateExam,
   getExamById,
