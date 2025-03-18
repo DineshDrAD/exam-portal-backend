@@ -1,6 +1,5 @@
 const mongoose = require('mongoose');
 
-// Define a Subtopic Schema
 const subtopicSchema = new mongoose.Schema(
   {
     name: {
@@ -16,7 +15,6 @@ const subtopicSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Define a Subject Schema
 const subjectSchema = new mongoose.Schema(
   {
     name: {
@@ -29,7 +27,6 @@ const subjectSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Create a model from the schema
 const Subject = mongoose.model('Subject', subjectSchema);
 
 module.exports = Subject;
