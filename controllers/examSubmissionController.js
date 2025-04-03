@@ -203,7 +203,6 @@ const getExamSubmissionById = async (req, res) => {
   try {
     const examSubmissionId = req.params.examSubmissionId;
 
-    // Validate ID format before querying
     if (
       !examSubmissionId ||
       !mongoose.Types.ObjectId.isValid(examSubmissionId)
@@ -237,6 +236,10 @@ const getExamSubmissionById = async (req, res) => {
           path: "evaluator",
           select: "username email",
         },
+      })
+      .populate({
+        path: "userId",
+        select: "email username role",
       });
 
     if (!examSubmissionData) {
@@ -246,7 +249,6 @@ const getExamSubmissionById = async (req, res) => {
       });
     }
 
-    // Check if examId, subject, and subTopic exist before accessing them
     if (
       examSubmissionData.examId &&
       examSubmissionData.examId.subject &&
@@ -481,7 +483,19 @@ const submitReviewForExamSubmission = async (req, res) => {
         { $push: { reviews: { evaluator: userId, message } } },
         { new: true }
       )
-      .populate("reviews.evaluator", "username email");
+      .populate("reviews.evaluator", "username email")
+      .populate({
+        path: "examId",
+        select: "subject subTopic level examCode passPercentage",
+        populate: {
+          path: "subject",
+          select: "name",
+        },
+      })
+      .populate({
+        path: "userId",
+        select: "email username role",
+      });
 
     if (!updatedExamSubmission) {
       return res.status(404).json({
@@ -522,7 +536,19 @@ const updateCommentInExamSubmission = async (req, res) => {
         { $set: { "reviews.$.message": message } },
         { new: true }
       )
-      .populate("reviews.evaluator", "username email");
+      .populate("reviews.evaluator", "username email")
+      .populate({
+        path: "examId",
+        select: "subject subTopic level examCode passPercentage",
+        populate: {
+          path: "subject",
+          select: "name",
+        },
+      })
+      .populate({
+        path: "userId",
+        select: "email username role",
+      });
 
     if (!updatedComment) {
       return res.status(404).json({
@@ -562,7 +588,19 @@ const deleteCommentInExamSubmission = async (req, res) => {
         { $pull: { reviews: { _id: reviewId } } },
         { new: true }
       )
-      .populate("reviews.evaluator", "username email");
+      .populate("reviews.evaluator", "username email")
+      .populate({
+        path: "examId",
+        select: "subject subTopic level examCode passPercentage",
+        populate: {
+          path: "subject",
+          select: "name",
+        },
+      })
+      .populate({
+        path: "userId",
+        select: "email username role",
+      });
 
     if (!deletedComment) {
       return res.status(404).json({

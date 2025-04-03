@@ -6,7 +6,7 @@ const ExamSubmissionSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      index: true, // Improves query performance
+      index: true,
     },
     examId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -58,6 +58,8 @@ const ExamSubmissionSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+ExamSubmissionSchema.path("reviews").schema.set("timestamps", true);
 
 ExamSubmissionSchema.index({ userId: 1, examId: 1 });
 

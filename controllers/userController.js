@@ -70,4 +70,17 @@ const getAllUsersData = async (req, res) => {
   }
 };
 
-module.exports = { registerUser, loginUser, getAllUsersData };
+const getUserBasedOnId = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const usersData = await userModel.findById(userId).select("-password");
+    if (!usersData) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    res.status(200).json(usersData);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+module.exports = { registerUser, loginUser, getAllUsersData, getUserBasedOnId };

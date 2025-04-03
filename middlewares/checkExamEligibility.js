@@ -4,16 +4,20 @@ const examModel = require("../models/examModel");
 const checkExamEligibility = async (req, res, next) => {
   try {
     const { userId } = req.body;
-    const { examCode } = req.body; // Assuming examCode is sent in the request body
+    const { examCode } = req.body;
 
-    // Find the exam details
     const exam = await examModel
       .findOne({ examCode })
       .populate({
+        path: "subject",
+        select: "name subtopics", // Select subject name and subtopics
+      })
+      .populate({
         path: "questions",
-        select: "-correctAnswers", // Exclude correctAnswers field
+        select: "-correctAnswers",
       })
       .lean();
+
     if (!exam) {
       return res.status(404).json({
         success: false,
@@ -21,21 +25,25 @@ const checkExamEligibility = async (req, res, next) => {
       });
     }
 
-    // Check if the user has completed the previous level
+    const matchingSubtopic = exam.subject.subtopics.find(
+      (subtopic) => subtopic._id.toString() === exam.subTopic.toString()
+    );
+
+    exam.subjectName = exam.subject.name;
+    exam.subtopicName = matchingSubtopic ? matchingSubtopic.name : null;
+
     const userProgress = await userPassSchema.findOne({
       userId,
       subject: exam.subject,
       subTopic: exam.subTopic,
-      level: exam.level - 1, // User must have passed the previous level
+      level: exam.level - 1,
       pass: true,
     });
 
     if (exam.level === 1 || userProgress) {
-      // User is eligible
-      req.exam = exam; // Pass exam details to the next middleware
+      req.exam = exam;
       return next();
     } else {
-      // User is not eligible
       return res.status(403).json({
         success: false,
         message: "You are not eligible to attend this exam.",
