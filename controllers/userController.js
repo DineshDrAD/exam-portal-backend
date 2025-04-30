@@ -20,7 +20,7 @@ const registerUser = async (req, res) => {
     if (password.length < 3) {
       return res
         .status(400)
-        .json({ error: "Password must be at least 6 characters long" });
+        .json({ error: "Password must be at least 3 characters long" });
     }
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
@@ -83,4 +83,35 @@ const getUserBasedOnId = async (req, res) => {
   }
 };
 
-module.exports = { registerUser, loginUser, getAllUsersData, getUserBasedOnId };
+const updatePassword = async (req, res) => {
+  try {
+    const { password } = req.body;
+    const { userId } = req.params;
+    if (!userId || !password) {
+      return res.status(400).json({ error: "All fields are required" });
+    }
+
+    if (password.length < 3) {
+      return res
+        .status(400)
+        .json({ error: "Password must be at least 3 characters long" });
+    }
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    const userData = await userModel.findByIdAndUpdate(userId, {
+      password: hashedPassword,
+    });
+    res.status(200).json(userData);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+module.exports = {
+  registerUser,
+  loginUser,
+  getAllUsersData,
+  getUserBasedOnId,
+  updatePassword,
+};

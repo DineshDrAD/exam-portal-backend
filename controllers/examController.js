@@ -67,7 +67,7 @@ const createExam = async (req, res) => {
       subTopic,
       level,
       status,
-      passPercentage,
+      passPercentage: passPercentage || 90,
       examCode,
       questions: createdQuestions.map((q) => q._id),
     });
@@ -108,6 +108,7 @@ const getAllExams = async (req, res) => {
           questions: exam.questions,
           passPercentage: exam.passPercentage,
           examCode: exam.examCode,
+          shuffleQuestion: exam.shuffleQuestion,
         };
       })
     );
@@ -145,6 +146,7 @@ const getAllExamWithoutCorrectAnswers = async (req, res) => {
           passPercentage: exam.passPercentage,
           questions,
           examCode: exam.examCode,
+          shuffleQuestion: exam.shuffleQuestion,
         };
       })
     );
@@ -161,7 +163,14 @@ const updateExam = async (req, res) => {
     const { subject, subTopic, level, status, questions, passPercentage } =
       req.body;
 
-    if (!subject || !subTopic || !level || !status || !questions) {
+    if (
+      !subject ||
+      !subTopic ||
+      !level ||
+      !status ||
+      !questions ||
+      !passPercentage
+    ) {
       return res.status(400).json({ error: "All fields are required" });
     }
 
@@ -207,7 +216,7 @@ const updateExam = async (req, res) => {
       }
     }
 
-    exam.passPercentage = passPercentage || exam.passPercentage;
+    exam.passPercentage = passPercentage || exam.passPercentage || 90;
     exam.questions = updatedQuestions;
 
     await exam.save();
@@ -255,6 +264,33 @@ const getAllExamDetailsWithoutAnswer = async (req, res) => {
   }
 };
 
+const updateShuffleQuestion = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const exam = await examModel.findById(id);
+    if (!exam) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Exam not found" });
+    }
+    await examModel.findByIdAndUpdate(id, {
+      shuffleQuestion: !exam.shuffleQuestion,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Questions shuffle updated successfully",
+      data: exam,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Unable to update the question shuffle",
+      error: error.message,
+    });
+  }
+};
+
 const getExamById = async (req, res) => {
   try {
     const { id } = req.params;
@@ -284,6 +320,7 @@ const getExamById = async (req, res) => {
         questions: exam.questions,
         examCode: exam.examCode,
         passPercentage: exam.passPercentage,
+        shuffleQuestion: exam.shuffleQuestion,
       };
     };
 
@@ -333,6 +370,7 @@ module.exports = {
   getAllExamDetailsWithoutAnswer,
   getAllExamWithoutCorrectAnswers,
   updateExam,
+  updateShuffleQuestion,
   getExamById,
   deleteExam,
 };

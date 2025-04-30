@@ -34,7 +34,11 @@ const examSchema = new mongoose.Schema(
     },
     passPercentage: {
       type: Number,
-      default: 0,
+      default: 90,
+    },
+    shuffleQuestion: {
+      type: Boolean,
+      default: false,
     },
   },
   {

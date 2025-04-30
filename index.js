@@ -3,8 +3,6 @@ const { connectWithRetry } = require("./config/db");
 const app = express();
 require("dotenv").config();
 const cors = require("cors");
-const { transporter } = require("./utils/MailTransporter");
-const examSubmissionSchema = require("./models/examSubmissionSchema");
 const PORT = process.env.PORT || 4000;
 
 connectWithRetry();
