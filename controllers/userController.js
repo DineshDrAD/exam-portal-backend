@@ -55,6 +55,12 @@ const loginUser = async (req, res) => {
       process.env.JWT_SECRET,
       { expiresIn: "2d" }
     );
+    res.cookie("token", token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "Strict",
+      maxAge: 1000 * 60 * 60 * 24,
+    });
     res.status(200).json({ user, token });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -108,10 +114,28 @@ const updatePassword = async (req, res) => {
   }
 };
 
+const logoutUser = async (req, res) => {
+  try {
+    res.clearCookie("token", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "Strict",
+      path: "/",
+    });
+    res.status(200).json({
+      succes: true,
+      message: "Logged out",
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
 module.exports = {
   registerUser,
   loginUser,
   getAllUsersData,
   getUserBasedOnId,
   updatePassword,
+  logoutUser,
 };
