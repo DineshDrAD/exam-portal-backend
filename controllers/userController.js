@@ -55,12 +55,14 @@ const loginUser = async (req, res) => {
       process.env.JWT_SECRET,
       { expiresIn: "2d" }
     );
+    await userModel.findByIdAndUpdate(user._id, { sessionToken: token });
     res.cookie("token", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "Strict",
       maxAge: 1000 * 60 * 60 * 24,
     });
+
     res.status(200).json({ user, token });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -116,6 +118,10 @@ const updatePassword = async (req, res) => {
 
 const logoutUser = async (req, res) => {
   try {
+    if (!req.user) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+    await userModel.findByIdAndUpdate(req.user._id, { sessionToken: null });
     res.clearCookie("token", {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
@@ -123,7 +129,7 @@ const logoutUser = async (req, res) => {
       path: "/",
     });
     res.status(200).json({
-      succes: true,
+      success: true,
       message: "Logged out",
     });
   } catch (error) {

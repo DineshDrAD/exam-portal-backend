@@ -25,6 +25,10 @@ const userSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Performance",
     },
+    sessionToken: {
+      type: String,
+      default: null,
+    },
   },
   {
     timestamps: true,
