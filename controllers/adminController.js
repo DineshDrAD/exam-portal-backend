@@ -1,4 +1,4 @@
-const userModel = require("../models/UserModel");
+const userModel = require("../models/userModel");
 const sendMail = require("../utils/sendMail");
 
 const triggerMail = async (req, res) => {

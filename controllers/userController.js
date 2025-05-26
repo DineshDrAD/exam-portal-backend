@@ -1,6 +1,6 @@
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-const userModel = require("../models/UserModel");
+const userModel = require("../models/userModel");
 
 const registerUser = async (req, res) => {
   try {
@@ -107,9 +107,23 @@ const updatePassword = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    const userData = await userModel.findByIdAndUpdate(userId, {
-      password: hashedPassword,
-    });
+    const userData = await userModel
+      .findByIdAndUpdate(userId, {
+        password: hashedPassword,
+      })
+      .select("-password");
+    res.status(200).json(userData);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+const getUserData = async (req, res) => {
+  try {
+    const userData = await userModel.findById(req.user._id).select("-password");
+    if (!userData) {
+      return res.status(404).json({ error: "User not found" });
+    }
     res.status(200).json(userData);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -144,4 +158,5 @@ module.exports = {
   getUserBasedOnId,
   updatePassword,
   logoutUser,
+  getUserData,
 };

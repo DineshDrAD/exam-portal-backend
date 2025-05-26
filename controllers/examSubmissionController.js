@@ -1,7 +1,7 @@
 const { default: mongoose } = require("mongoose");
 const examModel = require("../models/examModel");
 const examSubmissionSchema = require("../models/examSubmissionSchema");
-const userModel = require("../models/UserModel");
+const userModel = require("../models/userModel");
 const userPassSchema = require("../models/userPassSchema");
 const sendMail = require("../utils/sendMail");
 
