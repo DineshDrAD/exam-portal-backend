@@ -11,7 +11,7 @@ const authMiddleware = async (req, res, next) => {
     if (!user || user.sessionToken !== token) {
       return res
         .status(401)
-        .json({ error: "Session expired or logged in elsewhere" });
+        .json({ error: "Session expired. Please login again" });
     }
 
     req.user = user;

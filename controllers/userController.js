@@ -1,5 +1,7 @@
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const XLSX = require("xlsx");
+const { Readable } = require("stream");
 const userModel = require("../models/userModel");
 
 const registerUser = async (req, res) => {
@@ -64,6 +66,55 @@ const loginUser = async (req, res) => {
     });
 
     res.status(200).json({ user, token });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+const bulkCreateUsers = async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+    const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const users = XLSX.utils.sheet_to_json(sheet);
+
+    const insertedUsers = [];
+
+    for (const user of users) {
+      const { username, email, password, role } = user;
+      if (
+        typeof username !== "string" ||
+        typeof email !== "string" ||
+        typeof password !== "string" ||
+        typeof role !== "string" ||
+        !username.trim() ||
+        !email.trim() ||
+        !password.trim() ||
+        !role.trim()
+      ) {
+        continue;
+      }
+
+      const existing = await userModel.findOne({ email });
+      if (existing) continue;
+
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      const newUser = new userModel({
+        username,
+        email,
+        password: hashedPassword,
+        role: role.toLowerCase(),
+      });
+
+      await newUser.save();
+      insertedUsers.push(newUser);
+    }
+
+    res
+      .status(200)
+      .json({ message: "Users added", count: insertedUsers.length });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -151,12 +202,40 @@ const logoutUser = async (req, res) => {
   }
 };
 
+const downloadUserTemplate = (req, res) => {
+  const worksheetData = [
+    ["username", "email", "password", "role"],
+    ["JohnDoe", "john@example.com", "123456", "student"],
+  ];
+
+  const ws = XLSX.utils.aoa_to_sheet(worksheetData);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Users");
+
+  const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+  res.setHeader(
+    "Content-Disposition",
+    "attachment; filename=UserTemplate.xlsx"
+  );
+  res.setHeader(
+    "Content-Type",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+  );
+  const stream = new Readable();
+  stream.push(buffer);
+  stream.push(null);
+  stream.pipe(res);
+};
+
 module.exports = {
   registerUser,
   loginUser,
+  bulkCreateUsers,
   getAllUsersData,
   getUserBasedOnId,
   updatePassword,
   logoutUser,
   getUserData,
+  downloadUserTemplate,
 };

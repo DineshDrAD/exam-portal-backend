@@ -8,10 +8,15 @@ const {
   updatePassword,
   logoutUser,
   getUserData,
+  bulkCreateUsers,
+  downloadUserTemplate,
 } = require("../controllers/userController");
 const authMiddleware = require("../middlewares/authMiddleware");
+const { default: upload } = require("../utils/multerConfig");
 
+router.get("/download-template", downloadUserTemplate);
 router.post("/register", registerUser);
+router.post("/register/bulk-upload", upload.single("file"), bulkCreateUsers);
 router.post("/login", loginUser);
 router.get("/getall", getAllUsersData);
 router.get("/get/:userId", getUserBasedOnId);
