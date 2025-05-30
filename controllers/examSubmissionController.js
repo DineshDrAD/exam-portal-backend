@@ -4,6 +4,8 @@ const examSubmissionSchema = require("../models/examSubmissionSchema");
 const userModel = require("../models/userModel");
 const userPassSchema = require("../models/userPassSchema");
 const sendMail = require("../utils/sendMail");
+const markModel = require("../models/markModel");
+const { ensureMarkConfigExists } = require("./markController");
 
 const getAllPassedSubmission = async (req, res) => {
   try {
@@ -327,16 +329,23 @@ const submitExam = async (req, res) => {
         .json({ success: false, message: "Exam not found" });
     }
 
-    // Define marking scheme based on level
-    let positiveMark = 1,
-      negativeMark = 0.33;
+    const mark = await markModel.findById("mark-based-on-levels");
+    if (!mark) {
+      await ensureMarkConfigExists();
+    }
 
-    if (examDetails.level === 3) {
-      positiveMark = 2;
-      negativeMark = 0.66;
+    let positiveMark = mark.level1Mark,
+      negativeMark = mark.level1NegativeMark;
+
+    if (examDetails.level === 2) {
+      (positiveMark = mark.level2Mark),
+        (negativeMark = mark.level2NegativeMark);
+    } else if (examDetails.level === 3) {
+      (positiveMark = mark.level2Mark),
+        (negativeMark = mark.level2NegativeMark);
     } else if (examDetails.level === 4) {
-      positiveMark = 10;
-      negativeMark = 0; // No negative marks
+      (positiveMark = mark.level2Mark),
+        (negativeMark = mark.level2NegativeMark);
     }
 
     const enhancedExamData = submissionData.examData.map((studQuestion) => {

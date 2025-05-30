@@ -1,9 +1,17 @@
 const { default: mongoose } = require("mongoose");
+const {
+  ensureDurationConfigExists,
+} = require("../controllers/durationController");
+const { ensureMarkConfigExists } = require("../controllers/markController");
 
 const connectWithRetry = (retryCount = 4) => {
   mongoose
     .connect(process.env.MONGO_URI)
-    .then(() => console.log("MongoDB connection established..."))
+    .then(async () => {
+      await ensureDurationConfigExists();
+      await ensureMarkConfigExists();
+      console.log("MongoDB connection established...");
+    })
     .catch((error) => {
       console.error(`MongoDB connection failed: ${error.message}`);
       if (retryCount > 0) {
