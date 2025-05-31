@@ -366,47 +366,56 @@ const submitExam = async (req, res) => {
         (q) => q._id.toString() === studQuestion.questionId
       );
 
-      if (!question) return; // Skip if question ID not found
+      if (!question) return;
 
       const { questionType, correctAnswers } = question;
       const studentAnswer = studQuestion.studentAnswer;
 
-      if (questionType === "MCQ" || questionType === "Fill in the Blanks") {
-        // Single correct answer case
+      if (questionType === "MCQ") {
         if (correctAnswers.includes(studentAnswer?.toLowerCase())) {
           studentObtainedMarks += positiveMark;
         } else {
           studentObtainedMarks -= negativeMark;
         }
+      } else if (questionType === "Fill in the Blanks") {
+        if (
+          Array.isArray(correctAnswers) &&
+          typeof studentAnswer === "string"
+        ) {
+          const normalizedStudentAnswer = studentAnswer.trim().toLowerCase();
+
+          const isExactlyCorrect = correctAnswers.some(
+            (ans) =>
+              typeof ans === "string" &&
+              ans.trim().toLowerCase() === normalizedStudentAnswer
+          );
+
+          if (isExactlyCorrect) {
+            studentObtainedMarks += positiveMark;
+          }
+        }
       } else if (questionType === "MSQ") {
-        // Multiple Select Questions - Partial grading
         const correctSet = new Set(correctAnswers);
         const studentSet = new Set(studentAnswer);
-        let correctCount = 0,
-          incorrectCount = 0;
 
-        studentSet.forEach((ans) => {
-          if (correctSet.has(ans)) {
-            correctCount++;
-          } else {
-            incorrectCount++;
-          }
-        });
+        const allCorrectSelected = [...studentSet].every((ans) =>
+          correctSet.has(ans)
+        );
+        const noExtraSelected = studentSet.size === correctSet.size;
 
-        const totalCorrect = correctSet.size;
-        studentObtainedMarks += (correctCount / totalCorrect) * positiveMark; // Partial marking
-        studentObtainedMarks -= incorrectCount * negativeMark; // Negative marking for wrong choices
+        if (allCorrectSelected && noExtraSelected) {
+          studentObtainedMarks += positiveMark;
+        } else {
+          studentObtainedMarks += 0;
+        }
       } else if (questionType === "Short Answer") {
-        // Marks based on keyword matching
         let keywordMatches = correctAnswers.filter((word) =>
           studentAnswer?.toLowerCase().includes(word?.toLowerCase())
         ).length;
 
         if (keywordMatches > 0) {
           studentObtainedMarks +=
-            (keywordMatches / correctAnswers.length) * positiveMark; // Partial grading
-        } else {
-          studentObtainedMarks -= negativeMark; // Negative mark for no match
+            (keywordMatches / correctAnswers.length) * positiveMark;
         }
       }
     });
