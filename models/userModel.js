@@ -21,10 +21,6 @@ const userSchema = new mongoose.Schema(
       enum: ["student", "evaluator"],
     },
     password: { type: String, required: true, minlength: 3, maxlength: 1024 },
-    performance: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Performance",
-    },
     sessionToken: {
       type: String,
       default: null,

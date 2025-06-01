@@ -6,7 +6,7 @@ const userPassSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      index: true, // Improves query performance
+      index: true, 
     },
     subject: {
       type: mongoose.Schema.Types.ObjectId,

@@ -8,7 +8,7 @@ const subtopicSchema = new mongoose.Schema(
     },
     levels: {
       type: Number,
-      enum: [1, 2, 3, 4], // Only levels 1, 2, 3, and 4
+      enum: [1, 2, 3, 4], 
       required: true,
     },
   },
@@ -22,7 +22,7 @@ const subjectSchema = new mongoose.Schema(
       required: true,
       unique: true, 
     },
-    subtopics: [subtopicSchema], // Array of subtopics
+    subtopics: [subtopicSchema], 
   },
   { timestamps: true }
 );
