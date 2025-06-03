@@ -341,11 +341,11 @@ const submitExam = async (req, res) => {
       (positiveMark = mark.level2Mark),
         (negativeMark = mark.level2NegativeMark);
     } else if (examDetails.level === 3) {
-      (positiveMark = mark.level2Mark),
-        (negativeMark = mark.level2NegativeMark);
+      (positiveMark = mark.level3Mark),
+        (negativeMark = mark.level3NegativeMark);
     } else if (examDetails.level === 4) {
-      (positiveMark = mark.level2Mark),
-        (negativeMark = mark.level2NegativeMark);
+      (positiveMark = mark.level4Mark),
+        (negativeMark = mark.level4NegativeMark);
     }
 
     const enhancedExamData = submissionData.examData.map((studQuestion) => {
