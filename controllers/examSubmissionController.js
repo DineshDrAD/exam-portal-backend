@@ -513,6 +513,13 @@ const submitReviewForExamSubmission = async (req, res) => {
       .populate({
         path: "userId",
         select: "email username role",
+      })
+      .populate({
+        path: "examData",
+        select: "questionType questionText options",
+        populate: {
+          path: "questionId",
+        },
       });
 
     if (!updatedExamSubmission) {
@@ -566,6 +573,13 @@ const updateCommentInExamSubmission = async (req, res) => {
       .populate({
         path: "userId",
         select: "email username role",
+      })
+      .populate({
+        path: "examData",
+        select: "questionType questionText options",
+        populate: {
+          path: "questionId",
+        },
       });
 
     if (!updatedComment) {
@@ -618,6 +632,13 @@ const deleteCommentInExamSubmission = async (req, res) => {
       .populate({
         path: "userId",
         select: "email username role",
+      })
+      .populate({
+        path: "examData",
+        select: "questionType questionText options",
+        populate: {
+          path: "questionId",
+        },
       });
 
     if (!deletedComment) {
