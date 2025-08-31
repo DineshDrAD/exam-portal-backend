@@ -40,6 +40,24 @@ const examSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    questionSelection: {
+      MCQ: {
+        startIndex: { type: Number, default: 0 },
+        count: { type: Number, default: 0 },
+      },
+      MSQ: {
+        startIndex: { type: Number, default: 0 },
+        count: { type: Number, default: 0 },
+      },
+      "Fill in the Blanks": {
+        startIndex: { type: Number, default: 0 },
+        count: { type: Number, default: 0 },
+      },
+      "Short Answer": {
+        startIndex: { type: Number, default: 0 },
+        count: { type: Number, default: 0 },
+      },
+    },
   },
   {
     timestamps: true,

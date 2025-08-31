@@ -10,7 +10,7 @@ const checkExamEligibility = async (req, res, next) => {
       .findOne({ examCode })
       .populate({
         path: "subject",
-        select: "name subtopics", // Select subject name and subtopics
+        select: "name subtopics", 
       })
       .populate({
         path: "questions",
@@ -41,6 +41,38 @@ const checkExamEligibility = async (req, res, next) => {
     });
 
     if (exam.level === 1 || userProgress) {
+      if (
+        exam.questionSelection &&
+        exam.questions &&
+        exam.questions.length > 0
+      ) {
+        const questionsByType = exam.questions.reduce((acc, question) => {
+          const type = question.questionType;
+          if (!acc[type]) {
+            acc[type] = [];
+          }
+          acc[type].push(question);
+          return acc;
+        }, {});
+
+        const selectedQuestions = [];
+
+        Object.keys(exam.questionSelection).forEach((questionType) => {
+          const typeQuestions = questionsByType[questionType] || [];
+          const { startIndex, count } = exam.questionSelection[questionType];
+
+          if (count > 0 && typeQuestions.length > startIndex) {
+            const selected = typeQuestions.slice(
+              startIndex,
+              startIndex + count
+            );
+            selectedQuestions.push(...selected);
+          }
+        });
+
+        exam.questions = selectedQuestions;
+      }
+
       req.exam = exam;
       return next();
     } else {
