@@ -38,6 +38,39 @@ const registerUser = async (req, res) => {
   }
 };
 
+// const loginUser = async (req, res) => {
+//   try {
+//     const { email, password } = req.body;
+//     if (!email || !password) {
+//       return res.status(400).json({ error: "All fields are required" });
+//     }
+//     const user = await userModel.findOne({ email });
+//     if (!user) {
+//       return res.status(400).json({ error: "Invalid credentials" });
+//     }
+//     const isPasswordCorrect = await bcrypt.compare(password, user.password);
+//     if (!isPasswordCorrect) {
+//       return res.status(400).json({ error: "Invalid credentials" });
+//     }
+//     const token = jwt.sign(
+//       { userId: user._id, role: user.role },
+//       process.env.JWT_SECRET,
+//       { expiresIn: "2d" }
+//     );
+//     await userModel.findByIdAndUpdate(user._id, { sessionToken: token });
+//     res.cookie("token", token, {
+//       httpOnly: true,
+//       secure: process.env.NODE_ENV === "production",
+//       sameSite: "Strict",
+//       // maxAge: 1000 * 60 * 60 * 24,
+//     });
+
+//     res.status(200).json({ user, token });
+//   } catch (error) {
+//     res.status(500).json({ error: error.message });
+//   }
+// };
+
 const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -57,15 +90,12 @@ const loginUser = async (req, res) => {
       process.env.JWT_SECRET,
       { expiresIn: "2d" }
     );
-    await userModel.findByIdAndUpdate(user._id, { sessionToken: token });
-    res.cookie("token", token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "Strict",
-      // maxAge: 1000 * 60 * 60 * 24,
-    });
 
-    res.status(200).json({ user, token });
+    // Remove password from user object before sending
+    const userResponse = { ...user.toObject() };
+    delete userResponse.password;
+
+    res.status(200).json({ user: userResponse, token });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
