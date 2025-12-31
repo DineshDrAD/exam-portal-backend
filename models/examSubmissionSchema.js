@@ -33,8 +33,9 @@ const ExamSubmissionSchema = new mongoose.Schema(
           type: mongoose.Schema.Types.Mixed, // Supports multiple answer types
         },
         isRight: {
-          type: Boolean,
-          default: null,
+          type: String,
+          enum: ["Correct", "Incorrect", "Partially Correct", "Skipped"],
+          default: "Skipped",
         },
       },
     ],
