@@ -32,8 +32,16 @@ const ExamSubmissionSchema = new mongoose.Schema(
         correctAnswer: {
           type: mongoose.Schema.Types.Mixed, // Supports multiple answer types
         },
+        isRight: {
+          type: Boolean,
+          default: null,
+        },
       },
     ],
+    timetaken: {
+      type: Number,
+      default: 0, // Time taken in seconds
+    },
     obtainedMark: {
       type: Number,
       default: 0,

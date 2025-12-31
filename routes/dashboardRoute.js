@@ -5,6 +5,10 @@ const {
   getLevelWisePerformance,
   getSubtopicWiseStats,
   getStudentCompletionStatus,
+  getAllExamsOverview,
+  getExamDetailedAnalysis,
+  getStudentDetailedAnalysis,
+  getAllStudentsOverview,
 } = require("../controllers/dashboardController");
 
 const router = express.Router();
@@ -23,5 +27,11 @@ router.get("/subject/:subjectId/subtopic/:subtopicId", getSubtopicWiseStats);
 
 // Student completion status with filtering
 router.get("/student-completion", getStudentCompletionStatus);
+
+router.get("/exams/overview", getAllExamsOverview);
+router.get("/exams/:examId/analysis", getExamDetailedAnalysis);
+
+router.get("/students/overview", getAllStudentsOverview);
+router.get("/students/:studentId/analysis", getStudentDetailedAnalysis);
 
 module.exports = router;

@@ -9,6 +9,12 @@ const userSchema = new mongoose.Schema(
       maxlength: 200,
       unique: true,
     },
+    registerNumber: {
+      type: String,
+      unique: true,
+      sparse: true,
+      default: null,
+    },
     username: {
       type: String,
       minlength: 2,

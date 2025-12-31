@@ -6,18 +6,35 @@ const userModel = require("../models/userModel");
 
 const registerUser = async (req, res) => {
   try {
-    const { username, email, password, role } = req.body;
+    const { registerNumber, username, email, password, role } = req.body;
     if (!username || !email || !password || !role) {
       return res.status(400).json({ error: "All fields are required" });
     }
     if (role !== "student" && role !== "evaluator") {
       return res.status(400).json({ error: "Invalid role" });
     }
+
+    if (role === "student" && !registerNumber) {
+      return res
+        .status(400)
+        .json({ error: "Please enter the register number for student." });
+    }
+
     const existingUser = await userModel.findOne({ email });
     if (existingUser) {
       return res
         .status(400)
         .json({ error: "User with this email already exists" });
+    }
+    if (role === "student") {
+      const existingRegisterNumber = await userModel.findOne({
+        registerNumber,
+      });
+      if (existingRegisterNumber) {
+        return res
+          .status(400)
+          .json({ error: "User with this register number already exists" });
+      }
     }
     if (password.length < 3) {
       return res
@@ -27,8 +44,9 @@ const registerUser = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
     const user = await userModel.create({
+      registerNumber: role === "student" ? registerNumber : null,
       username,
-      email,
+      email: email.toLowerCase(),
       password: hashedPassword,
       role,
     });
@@ -73,14 +91,22 @@ const registerUser = async (req, res) => {
 
 const loginUser = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { registerNumber, email, password } = req.body;
     if (!email || !password) {
       return res.status(400).json({ error: "All fields are required" });
     }
-    const user = await userModel.findOne({ email });
+
+    const user = await userModel.findOne({ email: email.toLowerCase() });
     if (!user) {
       return res.status(400).json({ error: "Invalid credentials" });
     }
+
+    if (user.role === "student") {
+      if (user.registerNumber !== registerNumber) {
+        return res.status(400).json({ error: "Invalid Register Number" });
+      }
+    }
+
     const isPasswordCorrect = await bcrypt.compare(password, user.password);
     if (!isPasswordCorrect) {
       return res.status(400).json({ error: "Invalid credentials" });
@@ -112,12 +138,14 @@ const bulkCreateUsers = async (req, res) => {
     const insertedUsers = [];
 
     for (const user of users) {
-      const { username, email, password, role } = user;
+      const { registerNumber, username, email, password, role } = user;
       if (
+        (typeof registerNumber !== "string" && role === "student") ||
         typeof username !== "string" ||
         typeof email !== "string" ||
         typeof password !== "string" ||
         typeof role !== "string" ||
+        (!registerNumber.trim() && role === "student") ||
         !username.trim() ||
         !email.trim() ||
         !password.trim() ||
@@ -128,10 +156,19 @@ const bulkCreateUsers = async (req, res) => {
 
       const existing = await userModel.findOne({ email });
       if (existing) continue;
+      if (role === "student") {
+        const existingRegisterNumber = await userModel.findOne({
+          registerNumber,
+        });
+        if (existingRegisterNumber) {
+          continue;
+        }
+      }
 
       const hashedPassword = await bcrypt.hash(password, 10);
 
       const newUser = new userModel({
+        registerNumber: role === "student" ? registerNumber : null,
         username,
         email,
         password: hashedPassword,
@@ -234,8 +271,8 @@ const logoutUser = async (req, res) => {
 
 const downloadUserTemplate = (req, res) => {
   const worksheetData = [
-    ["username", "email", "password", "role"],
-    ["JohnDoe", "john@example.com", "123456", "student"],
+    ["registerNumber", "username", "email", "password", "role"],
+    ["7719801424", "JohnDoe", "john@example.com", "123456", "student"],
   ];
 
   const ws = XLSX.utils.aoa_to_sheet(worksheetData);

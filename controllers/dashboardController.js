@@ -539,10 +539,635 @@ const getStudentCompletionStatus = async (req, res) => {
   }
 };
 
+// Get all exams overview
+const getAllExamsOverview = async (req, res) => {
+  try {
+    const exams = await Exam.find({ status: "active" })
+      .populate("subject", "name subtopics")
+      .lean();
+
+    const examOverviews = await Promise.all(
+      exams.map(async (exam) => {
+        const submissions = await ExamSubmission.find({ examId: exam._id });
+
+        const totalSubmissions = submissions.length;
+        const marks = submissions.map((s) => s.obtainedMark || 0);
+
+        const avgScore =
+          totalSubmissions > 0
+            ? marks.reduce((a, b) => a + b, 0) / totalSubmissions
+            : 0;
+
+        const passedStudents = submissions.filter((s) => s.pass).length;
+        const passRate =
+          totalSubmissions > 0 ? (passedStudents / totalSubmissions) * 100 : 0;
+
+        const highestMark = totalSubmissions > 0 ? Math.max(...marks) : 0;
+        const lowestMark = totalSubmissions > 0 ? Math.min(...marks) : 0;
+
+        // 🔑 Find subtopic inside subject
+        const subTopicObj = exam.subject?.subtopics?.find(
+          (st) => st._id.toString() === exam.subTopic.toString()
+        );
+
+        return {
+          _id: exam._id,
+          examCode: exam.examCode,
+          subject: {
+            _id: exam.subject._id,
+            name: exam.subject.name,
+          },
+          subTopic: subTopicObj
+            ? { _id: subTopicObj._id, name: subTopicObj.name }
+            : null,
+          level: exam.level,
+          totalSubmissions,
+          avgScore: Number(avgScore.toFixed(2)),
+          passRate: Number(passRate.toFixed(2)),
+          highestMark,
+          lowestMark,
+        };
+      })
+    );
+
+    // Calculate overall statistics
+    const totalStudents = examOverviews.reduce(
+      (sum, exam) => sum + exam.totalSubmissions,
+      0
+    );
+    const overallAvgScore =
+      examOverviews.length > 0
+        ? examOverviews.reduce((sum, exam) => sum + exam.avgScore, 0) /
+          examOverviews.length
+        : 0;
+    const overallPassRate =
+      examOverviews.length > 0
+        ? examOverviews.reduce((sum, exam) => sum + exam.passRate, 0) /
+          examOverviews.length
+        : 0;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        exams: examOverviews,
+        statistics: {
+          totalStudents,
+          overallAvgScore: parseFloat(overallAvgScore.toFixed(2)),
+          overallPassRate: parseFloat(overallPassRate.toFixed(2)),
+          totalExams: examOverviews.length,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching exams overview:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching exams overview",
+      error: error.message,
+    });
+  }
+};
+
+// Get detailed exam analysis
+const getExamDetailedAnalysis = async (req, res) => {
+  try {
+    const { examId } = req.params;
+
+    // 1️⃣ Fetch exam with subject + embedded subtopics
+    const exam = await Exam.findById(examId)
+      .populate("subject", "name subtopics")
+      .populate("questions")
+      .lean();
+
+    if (!exam) {
+      return res.status(404).json({
+        success: false,
+        message: "Exam not found",
+      });
+    }
+
+    // 2️⃣ Resolve exam-level subTopic manually
+    const examSubTopic =
+      exam.subject?.subtopics?.find(
+        (st) => st._id.toString() === exam.subTopic?.toString()
+      ) || null;
+
+    // 3️⃣ Fetch submissions
+    const submissions = await ExamSubmission.find({ examId })
+      .populate("userId", "username email")
+      .populate(
+        "examData.questionId",
+        "question subTopic questionType correctAnswer"
+      )
+      .lean();
+
+    /* =======================
+       A. EXAM SUMMARY
+    ======================= */
+    const totalSubmission = submissions.length;
+    const marks = submissions.map((s) => s.obtainedMark || 0);
+
+    const highestMark = totalSubmission > 0 ? Math.max(...marks) : 0;
+    const lowestMark = totalSubmission > 0 ? Math.min(...marks) : 0;
+    const averageMark =
+      totalSubmission > 0
+        ? marks.reduce((a, b) => a + b, 0) / totalSubmission
+        : 0;
+
+    /* =======================
+       B. PERFORMANCE DISTRIBUTION
+    ======================= */
+    const above75 = submissions.filter(
+      (s) => (s.obtainedMark / s.examData.length) * 100 > 75
+    ).length;
+    const between50_75 = submissions.filter(
+      (s) =>
+        (s.obtainedMark / s.examData.length) * 100 >= 50 &&
+        (s.obtainedMark / s.examData.length) * 100 <= 75
+    ).length;
+    const below50 = submissions.filter(
+      (s) => (s.obtainedMark / s.examData.length) * 100 < 50
+    ).length;
+
+    const performanceDistribution = {
+      above75: {
+        count: above75,
+        percentage:
+          totalSubmission > 0
+            ? Number(((above75 / totalSubmission) * 100).toFixed(1))
+            : 0,
+      },
+      between50_75: {
+        count: between50_75,
+        percentage:
+          totalSubmission > 0
+            ? Number(((between50_75 / totalSubmission) * 100).toFixed(1))
+            : 0,
+      },
+      below50: {
+        count: below50,
+        percentage:
+          totalSubmission > 0
+            ? Number(((below50 / totalSubmission) * 100).toFixed(1))
+            : 0,
+      },
+    };
+
+    /* =======================
+       C. TOP PERFORMERS
+    ======================= */
+    const topPerformers = [...submissions]
+      .sort((a, b) => b.obtainedMark - a.obtainedMark)
+      .slice(0, 5)
+      .map((sub, index) => ({
+        rank: index + 1,
+        name: sub.userId?.username || "Unknown",
+        email: sub.userId?.email || "N/A",
+        marks: sub.obtainedMark,
+      }));
+
+    /* =======================
+       D. SUBTOPIC-WISE ANALYSIS
+    ======================= */
+    const subTopicAnalysis = {};
+
+    submissions.forEach((sub) => {
+      sub.examData.forEach((q) => {
+        if (!q.questionId || !q.questionId.subTopic) return;
+
+        const subTopicId = q.questionId.subTopic.toString();
+
+        // 🔑 Resolve subtopic from subject
+        const subTopicObj = exam.subject.subtopics.find(
+          (st) => st._id.toString() === subTopicId
+        );
+
+        const subTopicName = subTopicObj?.name || "Unknown";
+
+        if (!subTopicAnalysis[subTopicId]) {
+          subTopicAnalysis[subTopicId] = {
+            subTopicId,
+            subTopicName,
+            correct: 0,
+            total: 0,
+          };
+        }
+
+        subTopicAnalysis[subTopicId].total++;
+
+        const isCorrect =
+          JSON.stringify(q.studentAnswer) === JSON.stringify(q.correctAnswer);
+
+        if (isCorrect) {
+          subTopicAnalysis[subTopicId].correct++;
+        }
+      });
+    });
+
+    const subTopicData = Object.values(subTopicAnalysis).map((data) => ({
+      subTopic: data.subTopicName,
+      correct: data.correct,
+      total: data.total,
+      avgScore:
+        data.total > 0
+          ? Number(((data.correct / data.total) * 100).toFixed(1))
+          : 0,
+    }));
+
+    /* =======================
+       E. BEST & WORST SUBTOPICS
+    ======================= */
+    const sortedSubTopics = [...subTopicData].sort(
+      (a, b) => b.avgScore - a.avgScore
+    );
+
+    const bestSubTopic = sortedSubTopics[0] || {
+      subTopic: "N/A",
+      avgScore: 0,
+    };
+
+    const worstSubTopic = sortedSubTopics[sortedSubTopics.length - 1] || {
+      subTopic: "N/A",
+      avgScore: 0,
+    };
+
+    /* =======================
+       F. KEY INSIGHTS
+    ======================= */
+    const keyInsights = {
+      bestPerformingSubTopic: {
+        name: bestSubTopic.subTopic,
+        score: bestSubTopic.avgScore,
+      },
+      poorlyPerformingSubTopic: {
+        name: worstSubTopic.subTopic,
+        score: worstSubTopic.avgScore,
+      },
+    };
+
+    /* =======================
+       FINAL RESPONSE
+    ======================= */
+    res.status(200).json({
+      success: true,
+      data: {
+        exam: {
+          _id: exam._id,
+          examCode: exam.examCode,
+          subject: {
+            _id: exam.subject._id,
+            name: exam.subject.name,
+          },
+          subTopic: examSubTopic
+            ? { _id: examSubTopic._id, name: examSubTopic.name }
+            : null,
+          level: exam.level,
+          passPercentage: exam.passPercentage,
+        },
+        summary: {
+          totalStudents: totalSubmission,
+          highestMark,
+          lowestMark,
+          averageMark: Number(averageMark.toFixed(2)),
+        },
+        performanceDistribution,
+        topPerformers,
+        subTopicAnalysis: subTopicData,
+        mostMistakenTopic: worstSubTopic,
+        keyInsights,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching exam detailed analysis:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching exam detailed analysis",
+      error: error.message,
+    });
+  }
+};
+
+// Get all students overview
+const getAllStudentsOverview = async (req, res) => {
+  try {
+    const students = await User.find({ role: "student" })
+      .select("username email registerNumber")
+      .sort({ username: 1 })
+      .lean();
+
+    const studentOverviews = await Promise.all(
+      students.map(async (student) => {
+        const submissions = await ExamSubmission.find({ userId: student._id })
+          .populate("examId", "examCode subject")
+          .lean();
+
+        const totalExams = submissions.length;
+
+        const totalPercentageArray =
+          submissions.length > 0
+            ? submissions.map((exam) => {
+                return (exam.obtainedMark / exam.examData.length) * 100;
+              })
+            : [];
+
+        const avgPercentage =
+          totalPercentageArray.length > 0
+            ? totalPercentageArray.reduce(
+                (sum, percentage) => sum + percentage,
+                0
+              ) / totalPercentageArray.length
+            : 0;
+
+        const passedExams = submissions.filter((s) => s.pass).length;
+        const passRate = totalExams > 0 ? (passedExams / totalExams) * 100 : 0;
+
+        // Calculate total correct/attempted
+        let totalCorrect = 0;
+        let totalAttempted = 0;
+
+        submissions.forEach((sub) => {
+          sub.examData.forEach((q) => {
+            if (q.studentAnswer !== null && q.studentAnswer !== undefined) {
+              totalAttempted++;
+              const isCorrect =
+                JSON.stringify(q.studentAnswer) ===
+                JSON.stringify(q.correctAnswer);
+              if (isCorrect) totalCorrect++;
+            }
+          });
+        });
+
+        return {
+          _id: student._id,
+          name: student.username,
+          email: student.email,
+          registerNumber: student.registerNumber,
+          totalExams,
+          avgPercentage: parseFloat(avgPercentage.toFixed(2)),
+          passRate: parseFloat(passRate.toFixed(2)),
+          totalCorrect,
+          totalAttempted,
+        };
+      })
+    );
+
+    res.status(200).json({
+      success: true,
+      data: {
+        students: studentOverviews,
+        totalStudents: studentOverviews.length,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching students overview:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching students overview",
+      error: error.message,
+    });
+  }
+};
+
+// Get detailed student analysis
+const getStudentDetailedAnalysis = async (req, res) => {
+  try {
+    const { studentId } = req.params;
+
+    const student = await User.findById(studentId)
+      .select("username email registerNumber role")
+      .lean();
+
+    if (!student || student.role !== "student") {
+      return res.status(404).json({
+        success: false,
+        message: "Student not found",
+      });
+    }
+
+    const submissions = await ExamSubmission.find({ userId: studentId })
+      .populate({
+        path: "examId",
+        populate: {
+          path: "subject",
+          select: "name",
+        },
+      })
+      .populate("examData.questionId", "topic subTopic questionType")
+      .lean();
+
+    // A. Basic Details
+    const basicDetails = {
+      studentName: student.username,
+      email: student.email,
+      registerNumber: student.registerNumber,
+      course: "Not specified", // Add course field to User model if needed
+    };
+
+    const totalPercentageArray =
+      submissions.length > 0
+        ? submissions.map((exam) => {
+            return (exam.obtainedMark / exam.examData.length) * 100;
+          })
+        : [];
+
+    const avgPercentage =
+      totalPercentageArray.length > 0
+        ? totalPercentageArray.reduce(
+            (sum, percentage) => sum + percentage,
+            0
+          ) / totalPercentageArray.length
+        : 0;
+
+    // Calculate rank (you may want to implement a more sophisticated ranking system)
+    const allStudents = await User.find({ role: "student" })
+      .select("_id")
+      .lean();
+    const allStudentScores = await Promise.all(
+      allStudents.map(async (s) => {
+        const subs = await ExamSubmission.find({ userId: s._id }).lean();
+        const total = subs.reduce((sum, sub) => sum + sub.obtainedMark, 0);
+        const avg = subs.length > 0 ? total / subs.length : 0;
+        return { studentId: s._id.toString(), avgScore: avg };
+      })
+    );
+
+    const sortedStudents = allStudentScores.sort(
+      (a, b) => b.avgScore - a.avgScore
+    );
+    const rank = sortedStudents.findIndex((s) => s.studentId === studentId) + 1;
+
+    // Calculate accuracy
+    let totalCorrect = 0;
+    let totalAttempted = 0;
+
+    submissions.forEach((sub) => {
+      sub.examData.forEach((q) => {
+        if (q.studentAnswer !== null && q.studentAnswer !== undefined) {
+          totalAttempted++;
+          const isCorrect =
+            JSON.stringify(q.studentAnswer) === JSON.stringify(q.correctAnswer);
+          if (isCorrect) totalCorrect++;
+        }
+      });
+    });
+
+    const overallPerformance = {
+      percentage: parseFloat(avgPercentage.toFixed(2)),
+      rank,
+      totalStudents: allStudents.length,
+      correctAnswers: totalCorrect,
+      attemptedQuestions: totalAttempted,
+    };
+
+    const subjectPerformance = {};
+
+    submissions.forEach((sub) => {
+      if (!sub.examId || !sub.examId.subject) return;
+
+      const subjectName = sub.examId.subject.name;
+
+      if (!subjectPerformance[subjectName]) {
+        subjectPerformance[subjectName] = {
+          subjectName,
+          totalMarks: 0,
+          examsCount: 0,
+          correct: 0,
+          total: 0,
+        };
+      }
+
+      subjectPerformance[subjectName].totalMarks += sub.obtainedMark;
+      subjectPerformance[subjectName].examsCount += 1;
+
+      sub.examData.forEach((q) => {
+        if (q.questionId) {
+          subjectPerformance[subjectName].total++;
+          const isCorrect =
+            JSON.stringify(q.studentAnswer) === JSON.stringify(q.correctAnswer);
+          if (isCorrect) subjectPerformance[subjectName].correct++;
+        }
+      });
+    });
+
+    const subjectSummary = Object.values(subjectPerformance).map((subject) => {
+      const avgMarks =
+        subject.examsCount > 0 ? subject.totalMarks / subject.examsCount : 0;
+      const percentage =
+        subject.total > 0 ? (subject.correct / subject.total) * 100 : 0;
+
+      let strengthIndicator = "Weak";
+      if (percentage >= 75) strengthIndicator = "Strong";
+      else if (percentage >= 50) strengthIndicator = "Moderate";
+
+      return {
+        subject: subject.subjectName,
+        marksScored: parseFloat(avgMarks.toFixed(2)),
+        percentage: parseFloat(percentage.toFixed(2)),
+        strengthIndicator,
+      };
+    });
+
+    // D. Attempt Summary
+    let correctCount = 0;
+    let wrongCount = 0;
+    let skippedCount = 0;
+
+    submissions.forEach((sub) => {
+      console.log(sub.examData);
+
+      sub.examData.forEach((q) => {
+        if (
+          q.studentAnswer === null ||
+          q.studentAnswer === undefined ||
+          q.studentAnswer === ""
+        ) {
+          skippedCount++;
+        } else {
+          const isCorrect =
+            JSON.stringify(q.studentAnswer) === JSON.stringify(q.correctAnswer);
+          if (isCorrect) correctCount++;
+          else wrongCount++;
+        }
+      });
+    });
+
+    const attemptSummary = {
+      correct: correctCount,
+      wrong: wrongCount,
+      skipped: skippedCount,
+      total: correctCount + wrongCount + skippedCount,
+      correctPercentage: parseFloat(
+        (
+          (correctCount / (correctCount + wrongCount + skippedCount)) *
+          100
+        ).toFixed(1)
+      ),
+      wrongPercentage: parseFloat(
+        (
+          (wrongCount / (correctCount + wrongCount + skippedCount)) *
+          100
+        ).toFixed(1)
+      ),
+      skippedPercentage: parseFloat(
+        (
+          (skippedCount / (correctCount + wrongCount + skippedCount)) *
+          100
+        ).toFixed(1)
+      ),
+    };
+
+    // E. Key Insights
+    const sortedSubjects = [...subjectSummary].sort(
+      (a, b) => b.percentage - a.percentage
+    );
+    const strongestSubject = sortedSubjects[0] || {
+      subject: "N/A",
+      percentage: 0,
+    };
+    const weakestSubject = sortedSubjects[sortedSubjects.length - 1] || {
+      subject: "N/A",
+      percentage: 0,
+    };
+
+    const keyInsights = {
+      strongestSubject: {
+        name: strongestSubject.subject,
+        percentage: strongestSubject.percentage,
+      },
+      weakestSubject: {
+        name: weakestSubject.subject,
+        percentage: weakestSubject.percentage,
+      },
+    };
+
+    res.status(200).json({
+      success: true,
+      data: {
+        basicDetails,
+        overallPerformance,
+        subjectSummary,
+        attemptSummary,
+        keyInsights,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching student detailed analysis:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching student detailed analysis",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getDashboardStats,
   getSubjectWiseStats,
   getLevelWisePerformance,
   getSubtopicWiseStats,
   getStudentCompletionStatus,
+  getAllExamsOverview,
+  getExamDetailedAnalysis,
+  getAllStudentsOverview,
+  getStudentDetailedAnalysis,
 };

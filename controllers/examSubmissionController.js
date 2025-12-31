@@ -6,6 +6,10 @@ const userPassSchema = require("../models/userPassSchema");
 const sendMail = require("../utils/sendMail");
 const markModel = require("../models/markModel");
 const { ensureMarkConfigExists } = require("./markController");
+const {
+  evaluateQuestion,
+  calculateMarks,
+} = require("../utils/ExamSubmissionHelper");
 
 const getAllPassedSubmission = async (req, res) => {
   try {
@@ -289,7 +293,6 @@ const getExamSubmissionById = async (req, res) => {
 const submitExam = async (req, res) => {
   try {
     const { submissionData } = req.body;
-    let studentObtainedMarks = 0;
 
     if (!submissionData || !submissionData.userId || !submissionData.examId) {
       return res
@@ -302,23 +305,20 @@ const submitExam = async (req, res) => {
       examId: submissionData.examId,
     });
 
-    // Fetch exam details along with questions
     let examDetails = await examModel
       .findById(submissionData.examId)
       .populate({
         path: "subject",
-        select: "name subtopics", // Fetch subtopics along with subject name
+        select: "name subtopics",
       })
       .populate("questions");
 
     if (examDetails && examDetails.subject) {
-      // Find the specific subtopic within the subject
       const subtopic = examDetails.subject.subtopics.find((sub) =>
         sub._id.equals(examDetails.subTopic)
       );
 
-      // Attach subtopic name manually
-      examDetails = examDetails.toObject(); // Convert Mongoose document to plain object
+      examDetails = examDetails.toObject();
       examDetails.subTopic = subtopic ? subtopic._id : examDetails.subTopic;
       examDetails.subTopic.name = subtopic ? subtopic.name : null;
     }
@@ -352,83 +352,36 @@ const submitExam = async (req, res) => {
       const question = examDetails.questions.find(
         (q) => q._id.toString() === studQuestion.questionId
       );
-
       if (!question) return studQuestion;
 
-      return {
-        ...studQuestion,
-        correctAnswer: question.correctAnswers,
-      };
+      return evaluateQuestion(question, studQuestion);
     });
 
-    submissionData.examData.forEach((studQuestion) => {
-      const question = examDetails.questions.find(
-        (q) => q._id.toString() === studQuestion.questionId
-      );
-
-      if (!question) return;
-
-      const { questionType, correctAnswers } = question;
-      const studentAnswer = studQuestion.studentAnswer;
-
-      if (questionType === "MCQ") {
-        if (correctAnswers.includes(studentAnswer?.toLowerCase())) {
-          studentObtainedMarks += positiveMark;
-        } else {
-          studentObtainedMarks -= negativeMark;
-        }
-      } else if (questionType === "Fill in the Blanks") {
-        if (
-          Array.isArray(correctAnswers) &&
-          typeof studentAnswer === "string"
-        ) {
-          const normalizedStudentAnswer = studentAnswer.trim().toLowerCase();
-
-          const isExactlyCorrect = correctAnswers.some(
-            (ans) =>
-              typeof ans === "string" &&
-              ans.trim().toLowerCase() === normalizedStudentAnswer
-          );
-
-          if (isExactlyCorrect) {
-            studentObtainedMarks += positiveMark;
-          }
-        }
-      } else if (questionType === "MSQ") {
-        const correctSet = new Set(correctAnswers);
-        const studentSet = new Set(studentAnswer);
-
-        const allCorrectSelected = [...studentSet].every((ans) =>
-          correctSet.has(ans)
+    const studentObtainedMarks = submissionData.examData.reduce(
+      (total, studQuestion) => {
+        const question = examDetails.questions.find(
+          (q) => q._id.toString() === studQuestion.questionId
         );
-        const noExtraSelected = studentSet.size === correctSet.size;
+        if (!question) return total;
 
-        if (allCorrectSelected && noExtraSelected) {
-          studentObtainedMarks += positiveMark;
-        } else {
-          studentObtainedMarks += 0;
-        }
-      } else if (questionType === "Short Answer") {
-        let keywordMatches = correctAnswers.filter((word) =>
-          studentAnswer?.toLowerCase().includes(word?.toLowerCase())
-        ).length;
-
-        if (keywordMatches > 0) {
-          studentObtainedMarks +=
-            (keywordMatches / correctAnswers.length) * positiveMark;
-        }
-      }
-    });
+        return (
+          total +
+          calculateMarks(question, studQuestion, positiveMark, negativeMark)
+        );
+      },
+      0
+    );
 
     const passMark =
-      (examDetails.passPercentage / 100) * examDetails.questions.length;
+      (examDetails.passPercentage / 100) * submissionData.examData.length;
 
-    // Store exam submission in the database
     const submittedData = await examSubmissionSchema.create({
       userId: submissionData.userId,
       examId: submissionData.examId,
+      timetaken: submissionData.timetaken,
       attemptNumber: previousAttemptNumber + 1,
-      obtainedMark: studentObtainedMarks.toFixed(2),
+      obtainedMark:
+        studentObtainedMarks > 0 ? Number(studentObtainedMarks.toFixed(2)) : 0,
       examData: enhancedExamData,
       pass: studentObtainedMarks >= passMark,
     });
