@@ -6,7 +6,6 @@ const Subject = require("../models/subjectModel");
 const Question = require("../models/questionModel");
 const Exam = require("../models/examModel");
 const markModel = require("../models/markModel");
-const { getPostiveMarkForLevel } = require("./markController");
 
 // Dashboard statistics controller
 const getDashboardStats = async (req, res) => {

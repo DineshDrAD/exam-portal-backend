@@ -58,7 +58,7 @@ const getAnswerStatus = ({ questionType, correctAnswers, studentAnswer }) => {
   }
 };
 
-export const evaluateQuestion = (question, studQuestion) => {
+const evaluateQuestion = (question, studQuestion) => {
   const status = studQuestion.isAnswered
     ? getAnswerStatus({
         questionType: question.questionType,
@@ -74,7 +74,7 @@ export const evaluateQuestion = (question, studQuestion) => {
   };
 };
 
-export const calculateMarks = (
+const calculateMarks = (
   question,
   studQuestion,
   positiveMark,
@@ -139,9 +139,18 @@ export const calculateMarks = (
   }
 };
 
-export const getMarksByLevel = (mark, level) => {
+const getMarksByLevel = (mark, level) => {
   return {
     positive: mark[`level${level}Mark`],
     negative: mark[`level${level}NegativeMark`],
   };
 };
+
+
+
+module.exports = {
+  evaluateQuestion,
+  calculateMarks,
+  getMarksByLevel,
+};
+

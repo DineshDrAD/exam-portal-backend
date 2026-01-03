@@ -12,7 +12,7 @@ const {
   downloadUserTemplate,
 } = require("../controllers/userController");
 const authMiddleware = require("../middlewares/authMiddleware");
-const { default: upload } = require("../utils/multerConfig");
+const upload = require("../utils/multerConfig");
 
 router.get("/download-template", downloadUserTemplate);
 router.post("/register", registerUser);

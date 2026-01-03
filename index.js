@@ -6,8 +6,6 @@ require("dotenv").config();
 const cors = require("cors");
 const PORT = process.env.PORT || 4000;
 
-connectWithRetry();
-
 app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -34,6 +32,11 @@ app.use("/api/duration", require("./routes/durationRoute"));
 app.use("/api/mark", require("./routes/markRoute"));
 app.use("/api/dashboard", require("./routes/dashboardRoute"));
 
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+if (require.main === module) {
+  connectWithRetry();
+  app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+  });
+}
+
+module.exports = app;
