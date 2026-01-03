@@ -24,68 +24,6 @@ const generateUniqueExamCode = async () => {
   return examCode;
 };
 
-// const createExam = async (req, res) => {
-//   try {
-//     const { subject, subTopic, level, status, questions, passPercentage } =
-//       req.body;
-
-//     if (
-//       !subject ||
-//       !subTopic ||
-//       !level ||
-//       !status ||
-//       !questions ||
-//       !passPercentage
-//     ) {
-//       return res.status(400).json({ error: "All fields are required" });
-//     }
-
-//     const existingExam = await examModel.findOne({ subject, subTopic, level });
-//     if (existingExam) {
-//       return res.status(409).json({
-//         error: "Exam with this subject, subTopic, and level already exists",
-//       });
-//     }
-
-//     const examCode = await generateUniqueExamCode();
-
-//     const createdQuestions = await questionModel.create(
-//       questions.map((question) => ({
-//         subject,
-//         subTopic,
-//         level,
-//         questionType: question.questionType,
-//         questionText: question.questionText,
-//         options: question.options,
-//         correctAnswers: question.correctAnswers,
-//         image: question.image,
-//       }))
-//     );
-
-//     const exam = await examModel.create({
-//       subject,
-//       subTopic,
-//       level,
-//       status,
-//       passPercentage: passPercentage || 90,
-//       examCode,
-//       questions: createdQuestions.map((q) => q._id),
-//     });
-
-//     res.status(201).json({
-//       success: true,
-//       message: "Exam created successfully",
-//       data: exam,
-//     });
-//   } catch (error) {
-//     res.status(500).json({
-//       success: false,
-//       message: "Failed to create exam",
-//       error: error.message,
-//     });
-//   }
-// };
-
 const createExam = async (req, res) => {
   try {
     const {
@@ -194,122 +132,6 @@ const getAllExams = async (req, res) => {
   }
 };
 
-const getAllExamWithoutCorrectAnswers = async (req, res) => {
-  try {
-    const exams = await examModel.find().populate("subject questions");
-
-    const examsWithoutCorrectAnswers = await Promise.all(
-      exams.map(async (exam) => {
-        const subject = await Subject.findById(exam.subject);
-        const subTopic = subject?.subtopics.find(
-          (sub) => sub._id.toString() === exam.subTopic.toString()
-        );
-
-        const questions = exam.questions.map(({ _doc }) => {
-          const { correctAnswers, ...rest } = _doc;
-          return rest;
-        });
-
-        return {
-          _id: exam._id,
-          subject: subject?.name || "Unknown Subject",
-          subjectId: subject?._id,
-          subTopic: subTopic?.name || "Unknown Subtopic",
-          subTopicId: subTopic?._id,
-          level: exam.level,
-          status: exam.status,
-          passPercentage: exam.passPercentage,
-          questions,
-          examCode: exam.examCode,
-          shuffleQuestion: exam.shuffleQuestion,
-        };
-      })
-    );
-
-    res.status(200).json(examsWithoutCorrectAnswers);
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// const updateExam = async (req, res) => {
-//   try {
-//     const examId = req.params.id;
-//     const { subject, subTopic, level, status, questions, passPercentage } =
-//       req.body;
-
-//     if (
-//       !subject ||
-//       !subTopic ||
-//       !level ||
-//       !status ||
-//       !questions ||
-//       !passPercentage
-//     ) {
-//       return res.status(400).json({ error: "All fields are required" });
-//     }
-
-//     let exam = await examModel.findById(examId);
-
-//     if (!exam) {
-//       return res.status(404).json({
-//         success: false,
-//         message: "Exam not found with the provided ID",
-//       });
-//     }
-
-//     const updatedQuestions = [];
-
-//     for (const question of questions) {
-//       const existingQuestion = await questionModel.findOne({
-//         questionText: question.questionText,
-//         level,
-//         subject,
-//         subTopic,
-//       });
-
-//       if (existingQuestion) {
-//         existingQuestion.questionType = question.questionType;
-//         existingQuestion.options = question.options || existingQuestion.options;
-//         existingQuestion.correctAnswers = question.correctAnswers;
-//         existingQuestion.image = question.image || existingQuestion.image;
-
-//         const updatedQuestion = await existingQuestion.save();
-//         updatedQuestions.push(updatedQuestion._id);
-//       } else {
-//         const newQuestion = await questionModel.create({
-//           subject,
-//           subTopic,
-//           level,
-//           questionType: question.questionType,
-//           questionText: question.questionText,
-//           options: question.options,
-//           correctAnswers: question.correctAnswers,
-//           image: question.image,
-//         });
-//         updatedQuestions.push(newQuestion._id);
-//       }
-//     }
-
-//     exam.passPercentage = passPercentage || exam.passPercentage || 90;
-//     exam.questions = updatedQuestions;
-
-//     await exam.save();
-
-//     res.status(200).json({
-//       success: true,
-//       message: "Exam and questions updated successfully",
-//       data: exam,
-//     });
-//   } catch (error) {
-//     res.status(500).json({
-//       success: false,
-//       message: "Failed to update exam",
-//       error: error.message,
-//     });
-//   }
-// };
-
 const updateExam = async (req, res) => {
   try {
     const examId = req.params.id;
@@ -397,35 +219,6 @@ const updateExam = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to update exam",
-      error: error.message,
-    });
-  }
-};
-
-const getAllExamDetailsWithoutAnswer = async (req, res) => {
-  try {
-    const { examCode } = req.params;
-
-    const exam = await examModel.findOne({ examCode }).populate({
-      path: "questions",
-      select: "-correctAnswers",
-    });
-
-    if (!exam) {
-      return res.status(404).json({
-        success: false,
-        message: "Exam not found with the provided exam code",
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      exam,
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch exam details",
       error: error.message,
     });
   }
@@ -534,8 +327,6 @@ const deleteExam = async (req, res) => {
 module.exports = {
   createExam,
   getAllExams,
-  getAllExamDetailsWithoutAnswer,
-  getAllExamWithoutCorrectAnswers,
   updateExam,
   updateShuffleQuestion,
   getExamById,
