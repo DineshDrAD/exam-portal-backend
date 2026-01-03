@@ -65,6 +65,13 @@ const getPassedSubmissionForUser = async (req, res) => {
       });
     }
 
+    if (req.user.role === "student" && req.user._id.toString() !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden: You do not have the required permissions",
+      });
+    }
+
     const passedData = await examSubmissionSchema
       .find({
         userId: userId,
@@ -162,6 +169,13 @@ const getPreviousAttemptForUser = async (req, res) => {
       });
     }
 
+    if (req.user.role === "student" && req.user._id.toString() !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden: You do not have the required permissions",
+      });
+    }
+
     const previousAttemptData = await examSubmissionSchema
       .find({
         userId: userId,
@@ -252,6 +266,16 @@ const getExamSubmissionById = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: "Exam submission not found",
+      });
+    }
+
+    if (
+      req.user.role === "student" &&
+      req.user._id.toString() !== examSubmissionData.userId._id.toString()
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden: You do not have the required permissions",
       });
     }
 
@@ -508,6 +532,14 @@ const updateCommentInExamSubmission = async (req, res) => {
       });
     }
 
+    const existingSubmission = await examSubmissionSchema.findById(examId);
+    if (!existingSubmission) {
+      return res.status(404).json({
+        success: false,
+        message: "Exam Submission not found",
+      });
+    }
+
     const updatedComment = await examSubmissionSchema
       .findOneAndUpdate(
         { _id: examId, "reviews._id": reviewId },
@@ -564,6 +596,14 @@ const deleteCommentInExamSubmission = async (req, res) => {
       return res.status(500).json({
         success: false,
         message: "The Exam and Review Id is needed",
+      });
+    }
+
+    const existingSubmission = await examSubmissionSchema.findById(examId);
+    if (!existingSubmission) {
+      return res.status(404).json({
+        success: false,
+        message: "Exam Submission not found",
       });
     }
 

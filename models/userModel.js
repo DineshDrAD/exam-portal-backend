@@ -24,7 +24,7 @@ const userSchema = new mongoose.Schema(
     role: {
       type: String,
       required: true,
-      enum: ["student", "evaluator"],
+      enum: ["student", "evaluator", "admin"],
     },
     password: { type: String, required: true, minlength: 3, maxlength: 1024 },
     sessionToken: {

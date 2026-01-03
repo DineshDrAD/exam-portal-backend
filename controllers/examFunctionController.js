@@ -10,6 +10,20 @@ const getEligibleExamForUser = async (req, res) => {
   try {
     const { userId } = req.params;
 
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required.",
+      });
+    }
+
+    if (req.user._id.toString() !== userId && req.user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden: You do not have the required permissions",
+      });
+    }
+
     // Fetch user's passed exams
     const userProgress = await userPassSchema
       .find({ userId, pass: true })

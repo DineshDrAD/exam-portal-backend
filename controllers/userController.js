@@ -20,7 +20,7 @@ const registerUser = async (req, res) => {
         .json({ error: "Please enter the register number for student." });
     }
 
-    const existingUser = await userModel.findOne({ email });
+    const existingUser = await userModel.findOne({ email: email.toLowerCase() });
     if (existingUser) {
       return res
         .status(400)
@@ -213,6 +213,11 @@ const updatePassword = async (req, res) => {
   try {
     const { password } = req.body;
     const { userId } = req.params;
+
+    if (req.user.role !== "admin" && req.user._id.toString() !== userId) {
+      return res.status(403).json({ error: "Unauthorized to change password" });
+    }
+
     if (!userId || !password) {
       return res.status(400).json({ error: "All fields are required" });
     }

@@ -3,9 +3,18 @@ const {
   getMarkData,
   updateMarkData,
 } = require("../controllers/markController");
+const {
+  verifyToken,
+  authorizeRoles,
+} = require("../middlewares/authMiddleware");
 const router = express.Router();
 
-router.get("/get", getMarkData);
-router.put("/update", updateMarkData);
+router.get(
+  "/get",
+  verifyToken,
+  authorizeRoles("admin", "evaluator", "student"),
+  getMarkData
+);
+router.put("/update", verifyToken, authorizeRoles("admin"), updateMarkData);
 
 module.exports = router;
