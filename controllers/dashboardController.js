@@ -5,6 +5,8 @@ const User = require("../models/userModel");
 const Subject = require("../models/subjectModel");
 const Question = require("../models/questionModel");
 const Exam = require("../models/examModel");
+const markModel = require("../models/markModel");
+const { getPostiveMarkForLevel } = require("./markController");
 
 // Dashboard statistics controller
 const getDashboardStats = async (req, res) => {
@@ -949,7 +951,7 @@ const getStudentDetailedAnalysis = async (req, res) => {
         path: "examId",
         populate: {
           path: "subject",
-          select: "name",
+          select: "name subtopics",
         },
       })
       .populate("examData.questionId", "topic subTopic questionType")
@@ -1049,23 +1051,100 @@ const getStudentDetailedAnalysis = async (req, res) => {
       });
     });
 
-    const subjectSummary = Object.values(subjectPerformance).map((subject) => {
-      const avgMarks =
-        subject.examsCount > 0 ? subject.totalMarks / subject.examsCount : 0;
-      const percentage =
-        subject.total > 0 ? (subject.correct / subject.total) * 100 : 0;
+    // C. Exam-wise Summary (NEW)
+    const markData = await markModel.findById("mark-based-on-levels");
+    if (!markData) {
+      throw new Error("Mark configuration not found");
+    }
 
-      let strengthIndicator = "Weak";
-      if (percentage >= 75) strengthIndicator = "Strong";
-      else if (percentage >= 50) strengthIndicator = "Moderate";
+    const getPositiveMarkForLevelSync = (level, markData) => {
+      switch (level) {
+        case 1:
+          return markData.level1Mark;
+        case 2:
+          return markData.level2Mark;
+        case 3:
+          return markData.level3Mark;
+        case 4:
+          return markData.level4Mark;
+        default:
+          return 0;
+      }
+    };
+
+    const examSummary = submissions.map((sub) => {
+      let correct = 0;
+      let wrong = 0;
+      let partial = 0;
+      let skipped = 0;
+
+      sub.examData.forEach((q) => {
+        if (q.isRight === "Correct") correct++;
+        else if (q.isRight === "Incorrect") wrong++;
+        else if (q.isRight === "Partially Correct") partial++;
+        else skipped++;
+      });
+
+      let subTopicName = "N/A";
+
+      if (sub.examId?.subject?.subtopics?.length && sub.examId?.subTopic) {
+        const match = sub.examId.subject.subtopics.find(
+          (st) => st._id.toString() === sub.examId.subTopic.toString()
+        );
+        if (match) subTopicName = match.name;
+      }
+
+      const positiveMark = getPositiveMarkForLevelSync(
+        sub.examId.level,
+        markData
+      );
+
+      const totalMarks = sub.examData.length * positiveMark;
+
+      const percentage =
+        totalMarks > 0
+          ? Number(((sub.obtainedMark / totalMarks) * 100).toFixed(2))
+          : 0;
 
       return {
-        subject: subject.subjectName,
-        marksScored: parseFloat(avgMarks.toFixed(2)),
-        percentage: parseFloat(percentage.toFixed(2)),
-        strengthIndicator,
+        examId: sub.examId?._id,
+        subject: sub.examId?.subject?.name || "N/A",
+        subTopic: subTopicName || "N/A",
+        level: sub.examId?.level || "N/A",
+        totalQuestions: sub.examData.length,
+        correct,
+        wrong,
+        partial,
+        skipped,
+        percentage,
       };
     });
+
+    const groupedBySubject = {};
+
+    examSummary.forEach((exam) => {
+      if (!groupedBySubject[exam.subject]) {
+        groupedBySubject[exam.subject] = [];
+      }
+      groupedBySubject[exam.subject].push(exam);
+    });
+
+    const subjectChart = {};
+
+    examSummary.forEach((exam) => {
+      if (!subjectChart[exam.subject]) {
+        subjectChart[exam.subject] = { total: 0, count: 0 };
+      }
+      subjectChart[exam.subject].total += exam.percentage;
+      subjectChart[exam.subject].count++;
+    });
+
+    const subjectChartData = Object.entries(subjectChart).map(
+      ([subject, val]) => ({
+        subject,
+        percentage: val.total / val.count,
+      })
+    );
 
     // D. Attempt Summary
     let correctCount = 0;
@@ -1124,13 +1203,15 @@ const getStudentDetailedAnalysis = async (req, res) => {
     };
 
     // E. Key Insights
-    const sortedSubjects = [...subjectSummary].sort(
+    const sortedSubjects = [...subjectChartData].sort(
       (a, b) => b.percentage - a.percentage
     );
+
     const strongestSubject = sortedSubjects[0] || {
       subject: "N/A",
       percentage: 0,
     };
+
     const weakestSubject = sortedSubjects[sortedSubjects.length - 1] || {
       subject: "N/A",
       percentage: 0,
@@ -1150,9 +1231,10 @@ const getStudentDetailedAnalysis = async (req, res) => {
     res.status(200).json({
       success: true,
       data: {
+        examGroupedBySubject: groupedBySubject,
         basicDetails,
         overallPerformance,
-        subjectSummary,
+        subjectChartData,
         attemptSummary,
         keyInsights,
       },

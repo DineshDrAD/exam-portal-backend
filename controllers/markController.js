@@ -63,4 +63,8 @@ const updateMarkData = async (req, res) => {
   }
 };
 
-module.exports = { ensureMarkConfigExists, getMarkData, updateMarkData };
+module.exports = {
+  ensureMarkConfigExists,
+  getMarkData,
+  updateMarkData,
+};
