@@ -1069,48 +1069,55 @@ const getStudentDetailedAnalysis = async (req, res) => {
 
     // D. Attempt Summary
     let correctCount = 0;
-    let wrongCount = 0;
+    let inCorrectCount = 0;
     let skippedCount = 0;
+    let partialMarkCount = 0;
 
     submissions.forEach((sub) => {
-      console.log(sub.examData);
-
       sub.examData.forEach((q) => {
-        if (
-          q.studentAnswer === null ||
-          q.studentAnswer === undefined ||
-          q.studentAnswer === ""
-        ) {
-          skippedCount++;
+        if (q.isRight === "Correct") {
+          correctCount++;
+        } else if (q.isRight === "Incorrect") {
+          inCorrectCount++;
+        } else if (q.isRight === "Partially Correct") {
+          partialMarkCount++;
         } else {
-          const isCorrect =
-            JSON.stringify(q.studentAnswer) === JSON.stringify(q.correctAnswer);
-          if (isCorrect) correctCount++;
-          else wrongCount++;
+          skippedCount++;
         }
       });
     });
 
     const attemptSummary = {
       correct: correctCount,
-      wrong: wrongCount,
+      wrong: inCorrectCount,
       skipped: skippedCount,
-      total: correctCount + wrongCount + skippedCount,
+      partialCorrect: partialMarkCount,
+      total: correctCount + inCorrectCount + skippedCount + partialMarkCount,
       correctPercentage: parseFloat(
         (
-          (correctCount / (correctCount + wrongCount + skippedCount)) *
+          (correctCount /
+            (correctCount + inCorrectCount + skippedCount + partialMarkCount)) *
           100
         ).toFixed(1)
       ),
       wrongPercentage: parseFloat(
         (
-          (wrongCount / (correctCount + wrongCount + skippedCount)) *
+          (inCorrectCount /
+            (correctCount + inCorrectCount + skippedCount + partialMarkCount)) *
           100
         ).toFixed(1)
       ),
       skippedPercentage: parseFloat(
         (
-          (skippedCount / (correctCount + wrongCount + skippedCount)) *
+          (skippedCount /
+            (correctCount + inCorrectCount + skippedCount + partialMarkCount)) *
+          100
+        ).toFixed(1)
+      ),
+      partialPercentage: parseFloat(
+        (
+          (partialMarkCount /
+            (correctCount + inCorrectCount + skippedCount + partialMarkCount)) *
           100
         ).toFixed(1)
       ),
