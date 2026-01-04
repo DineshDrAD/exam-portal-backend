@@ -10,8 +10,29 @@ const registerUser = async (req, res) => {
     if (!username || !email || !password || !role) {
       return res.status(400).json({ error: "All fields are required" });
     }
-    if (role !== "student" && role !== "evaluator") {
+    if (role !== "student" && role !== "evaluator" && role !== "admin") {
       return res.status(400).json({ error: "Invalid role" });
+    }
+
+    // Task 5: Secure Admin Creation
+    if (role === "admin") {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return res
+          .status(403)
+          .json({ error: "Unauthorized: Admin creation requires admin privileges" });
+      }
+      const token = authHeader.substring(7);
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        if (decoded.role !== "admin") {
+          return res.status(403).json({
+            error: "Forbidden: Only existing admins can create new admins",
+          });
+        }
+      } catch (err) {
+        return res.status(401).json({ error: "Invalid or expired token" });
+      }
     }
 
     if (role === "student" && !registerNumber) {
@@ -116,6 +137,8 @@ const loginUser = async (req, res) => {
       process.env.JWT_SECRET,
       { expiresIn: "2d" }
     );
+
+    await userModel.findByIdAndUpdate(user._id, { sessionToken: token });
 
     // Remove password from user object before sending
     const userResponse = { ...user.toObject() };

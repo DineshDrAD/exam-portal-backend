@@ -17,6 +17,10 @@ const verifyToken = async (req, res, next) => {
       return res.status(401).json({ error: "User not found" });
     }
 
+    if (user.sessionToken !== token) {
+      return res.status(401).json({ error: "Session expired or invalid" });
+    }
+
     req.user = user;
     next();
   } catch (error) {

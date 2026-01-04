@@ -51,6 +51,11 @@ const ExamSubmissionSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    status: {
+      type: String,
+      enum: ["started", "completed"],
+      default: "completed", // Default to completed for backward compatibility
+    },
     reviews: [
       {
         evaluator: {

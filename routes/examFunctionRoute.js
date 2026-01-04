@@ -35,12 +35,49 @@ router.post(
   verifyToken,
   authorizeRoles("admin", "student"),
   checkExamEligibility,
-  (req, res) => {
-    res.status(200).json({
-      success: true,
-      message: "You are eligible to attend this exam.",
-      exam: req.exam,
-    });
+  async (req, res) => {
+    try {
+      const examSubmissionSchema = require("../models/examSubmissionSchema");
+      const { userId } = req.body;
+      const { _id: examId } = req.exam;
+
+      // Check for existing started submission
+      let submission = await examSubmissionSchema.findOne({
+        userId,
+        examId,
+        status: "started",
+      });
+
+      if (!submission) {
+        const previousAttempts = await examSubmissionSchema.countDocuments({
+          userId,
+          examId,
+          status: "completed",
+        });
+
+        submission = await examSubmissionSchema.create({
+          userId,
+          examId,
+          attemptNumber: previousAttempts + 1,
+          status: "started",
+          examData: [], // Empty initially
+        });
+      }
+
+      res.status(200).json({
+        success: true,
+        message: "Exam started successfully.",
+        exam: req.exam,
+        submissionId: submission._id,
+        startTime: submission.createdAt,
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "Error starting exam",
+        error: error.message,
+      });
+    }
   }
 );
 

@@ -10,6 +10,7 @@ const {
   evaluateQuestion,
   calculateMarks,
 } = require("../utils/ExamSubmissionHelper");
+const durationModel = require("../models/durationModel");
 
 const getAllPassedSubmission = async (req, res) => {
   try {
@@ -314,6 +315,7 @@ const getExamSubmissionById = async (req, res) => {
   }
 };
 
+
 const submitExam = async (req, res) => {
   try {
     const { submissionData } = req.body;
@@ -324,10 +326,19 @@ const submitExam = async (req, res) => {
         .json({ success: false, message: "Invalid submission data" });
     }
 
-    const previousAttemptNumber = await examSubmissionSchema.countDocuments({
+    // 1. Find the STARTED submission
+    const existingSubmission = await examSubmissionSchema.findOne({
       userId: submissionData.userId,
       examId: submissionData.examId,
+      status: "started",
     });
+
+    if (!existingSubmission) {
+      return res.status(400).json({
+        success: false,
+        message: "No active exam session found. Please start the exam again.",
+      });
+    }
 
     let examDetails = await examModel
       .findById(submissionData.examId)
@@ -351,6 +362,39 @@ const submitExam = async (req, res) => {
       return res
         .status(404)
         .json({ success: false, message: "Exam not found" });
+    }
+
+    // 2. Server-side Duration Check
+    const durationConfig = await durationModel.findById("duration-in-seconds");
+    let allowedDuration = 0;
+    if (durationConfig) {
+        if (examDetails.level === 1) allowedDuration = durationConfig.level1Duration;
+        else if (examDetails.level === 2) allowedDuration = durationConfig.level2Duration;
+        else if (examDetails.level === 3) allowedDuration = durationConfig.level3Duration;
+        else if (examDetails.level === 4) allowedDuration = durationConfig.level4Duration;
+    }
+
+    // Fallback if config missing or 0 (should not happen if configured correctly)
+    if (!allowedDuration) allowedDuration = 3600; // Default 1 hour safety
+
+    const startTime = new Date(existingSubmission.createdAt).getTime();
+    const currentTime = Date.now();
+    const timeTakenSeconds = (currentTime - startTime) / 1000;
+    const GRACE_PERIOD_SECONDS = 60; // 1 minute grace for network latency
+
+    if (timeTakenSeconds > allowedDuration + GRACE_PERIOD_SECONDS) {
+        // Mark as failed due to timeout? Or just reject?
+        // Let's mark as completed but failed.
+        existingSubmission.status = "completed";
+        existingSubmission.pass = false;
+        existingSubmission.obtainedMark = 0;
+        existingSubmission.timetaken = allowedDuration; // Cap time
+        await existingSubmission.save();
+
+        return res.status(400).json({
+            success: false,
+            message: "Submission rejected: Time limit exceeded.",
+        });
     }
 
     const mark = await markModel.findById("mark-based-on-levels");
@@ -399,18 +443,21 @@ const submitExam = async (req, res) => {
     const passMark =
       (examDetails.passPercentage / 100) * submissionData.examData.length;
 
-    const submittedData = await examSubmissionSchema.create({
-      userId: submissionData.userId,
-      examId: submissionData.examId,
-      timetaken: submissionData.timetaken,
-      attemptNumber: previousAttemptNumber + 1,
-      obtainedMark:
-        studentObtainedMarks > 0 ? Number(studentObtainedMarks.toFixed(2)) : 0,
-      examData: enhancedExamData,
-      pass: studentObtainedMarks >= passMark,
-    });
+    // 3. Update Existing Submission
+    existingSubmission.timetaken = submissionData.timetaken; // Trust client time? No, use calculated? User asked to not rely on client.
+    // Let's use Server calculated time or client time capped by server?
+    // "Calculate actual time taken using timestamps"
+    existingSubmission.timetaken = Math.min(timeTakenSeconds, allowedDuration); 
+    
+    existingSubmission.obtainedMark =
+      studentObtainedMarks > 0 ? Number(studentObtainedMarks.toFixed(2)) : 0;
+    existingSubmission.examData = enhancedExamData;
+    existingSubmission.pass = studentObtainedMarks >= passMark;
+    existingSubmission.status = "completed";
+    
+    await existingSubmission.save();
 
-    if (previousAttemptNumber >= 5 && passMark > studentObtainedMarks) {
+    if (existingSubmission.attemptNumber >= 5 && passMark > studentObtainedMarks) {
       const evaluators = await userModel
         .find({ role: "evaluator" })
         .select("email");
@@ -420,10 +467,10 @@ const submitExam = async (req, res) => {
         const userDetail = await userModel.findById(submissionData.userId);
 
         const subject = `Student Repeated Exam Attempts: ${userDetail.username}`;
-        const text = `The user ${userDetail.username} (Email: ${userDetail.email}) has attempted the exam ${previousAttemptNumber} times but has not yet passed. Exam Details: Subject - ${examDetails.subject.name}, Subtopic - ${examDetails.subTopic.name}, Level - ${examDetails.level}.`;
+        const text = `The user ${userDetail.username} (Email: ${userDetail.email}) has attempted the exam ${existingSubmission.attemptNumber} times but has not yet passed. Exam Details: Subject - ${examDetails.subject.name}, Subtopic - ${examDetails.subTopic.name}, Level - ${examDetails.level}.`;
         const html = `
           <h2>Exam Attempt Alert</h2>
-          <p>The student <strong>${userDetail.username}</strong> has attempted the exam <strong>${previousAttemptNumber} times</strong> but has not yet passed.</p>
+          <p>The student <strong>${userDetail.username}</strong> has attempted the exam <strong>${existingSubmission.attemptNumber} times</strong> but has not yet passed.</p>
           <h3>Exam Details:</h3>
           <ul>
             <li><strong>Subject:</strong> ${examDetails.subject.name}</li>
@@ -450,7 +497,7 @@ const submitExam = async (req, res) => {
     res.status(200).json({
       success: true,
       message: "Exam submitted successfully",
-      submittedData: submittedData,
+      submittedData: existingSubmission,
     });
   } catch (error) {
     console.error(error);
