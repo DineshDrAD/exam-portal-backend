@@ -64,4 +64,8 @@ const examSchema = new mongoose.Schema(
   }
 );
 
+// Performance indexes for common queries
+examSchema.index({ subject: 1, subTopic: 1, level: 1 }); // For exam lookups
+examSchema.index({ status: 1 }); // For active exam queries
+
 module.exports = mongoose.model("Exam", examSchema);

@@ -32,6 +32,7 @@ const userPassSchema = new mongoose.Schema(
   }
 );
 
-userPassSchema.index({ userId: 1, subject: 1, subTopic: 1, level: 1 });
+// Unique constraint to prevent duplicate pass records
+userPassSchema.index({ userId: 1, subject: 1, subTopic: 1, level: 1 }, { unique: true });
 
 module.exports = mongoose.model("UserPass", userPassSchema);

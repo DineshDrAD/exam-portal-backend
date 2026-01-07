@@ -75,6 +75,13 @@ const ExamSubmissionSchema = new mongoose.Schema(
 
 ExamSubmissionSchema.path("reviews").schema.set("timestamps", true);
 
-ExamSubmissionSchema.index({ userId: 1, examId: 1 });
+// Unique constraint to prevent duplicate submissions per attempt
+ExamSubmissionSchema.index({ userId: 1, examId: 1, attemptNumber: 1 }, { unique: true });
+
+// Performance indexes for common queries
+ExamSubmissionSchema.index({ examId: 1, status: 1 }); // For checking active submissions
+ExamSubmissionSchema.index({ userId: 1, pass: 1 }); // For pass/fail queries
+ExamSubmissionSchema.index({ status: 1, createdAt: -1 }); // For status-based queries
+ExamSubmissionSchema.index({ pass: 1, examId: 1 }); // For pass statistics
 
 module.exports = mongoose.model("ExamSubmission", ExamSubmissionSchema);

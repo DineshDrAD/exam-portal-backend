@@ -2,11 +2,14 @@ const request = require('supertest');
 const examModel = require('../models/examModel');
 const questionModel = require('../models/questionModel');
 const SubjectModel = require('../models/subjectModel');
+const userModel = require('../models/userModel');
+const jwt = require('jsonwebtoken');
 
 // Mock dependencies
 jest.mock('../models/examModel');
 jest.mock('../models/questionModel');
 jest.mock('../models/subjectModel');
+jest.mock('../models/userModel');
 jest.mock('../config/db', () => ({
   connectWithRetry: jest.fn(),
 }));
@@ -15,8 +18,31 @@ jest.mock('../config/db', () => ({
 const app = require('../index');
 
 describe('Exam Endpoints', () => {
+    let authToken;
+    let mockAdminUser;
+
     beforeEach(() => {
         jest.clearAllMocks();
+        
+        // Create mock admin user
+        mockAdminUser = {
+            _id: 'admin123',
+            email: 'admin@test.com',
+            role: 'admin',
+            sessionToken: null
+        };
+
+        // Generate auth token
+        authToken = jwt.sign(
+            { userId: mockAdminUser._id },
+            process.env.JWT_SECRET || 'test-secret'
+        );
+
+        // Update mock user with session token
+        mockAdminUser.sessionToken = authToken;
+
+        // Mock userModel.findById to return the admin user
+        userModel.findById.mockResolvedValue(mockAdminUser);
     });
 
     describe('POST /api/exams/create', () => {
@@ -39,7 +65,7 @@ describe('Exam Endpoints', () => {
             };
 
             // Setup Mocks
-            examModel.findOne.mockResolvedValue(null); // No existing exam with same details, no existing examCode
+            examModel.findOne.mockResolvedValue(null);
             questionModel.create.mockResolvedValue([{ _id: 'q1', ...mockQuestions[0] }]);
             examModel.create.mockResolvedValue({
                 _id: 'exam1',
@@ -50,6 +76,7 @@ describe('Exam Endpoints', () => {
 
             const res = await request(app)
                 .post('/api/exams/create')
+                .set('Authorization', `Bearer ${authToken}`)
                 .send(reqBody);
 
             expect(res.statusCode).toEqual(201);
@@ -61,6 +88,7 @@ describe('Exam Endpoints', () => {
         it('should return 400 if required fields are missing', async () => {
             const res = await request(app)
                 .post('/api/exams/create')
+                .set('Authorization', `Bearer ${authToken}`)
                 .send({}); // Empty body
 
             expect(res.statusCode).toEqual(400);
@@ -72,7 +100,7 @@ describe('Exam Endpoints', () => {
         // Mock Data
         const mockExam = {
           _id: 'exam1',
-          subject: 'MathId', // in DB it stores ID
+          subject: 'MathId',
           subTopic: 'AlgebraId',
           level: 'Easy',
           status: 'Active',
@@ -92,11 +120,13 @@ describe('Exam Endpoints', () => {
           subtopics: [{ _id: 'AlgebraId', name: 'Algebra' }]
         });
 
-        const res = await request(app).get('/api/exams/getAll');
+        const res = await request(app)
+            .get('/api/exams/getAll')
+            .set('Authorization', `Bearer ${authToken}`);
 
         expect(res.statusCode).toEqual(200);
         expect(Array.isArray(res.body)).toBe(true);
-        expect(res.body[0].subject).toBe('Mathematics'); // Verified hydration
+        expect(res.body[0].subject).toBe('Mathematics');
       });
     });
 });

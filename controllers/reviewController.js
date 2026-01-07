@@ -203,6 +203,20 @@ const addComment = async (req, res) => {
           "All the fields are required and percentages must be non-negative",
       });
     }
+
+    // Validate percentage range (0-100)
+    if (
+      startingPercentage < 0 ||
+      startingPercentage > 100 ||
+      endingPercentage < 0 ||
+      endingPercentage > 100
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Percentages must be between 0 and 100",
+      });
+    }
+
     if (startingPercentage > endingPercentage) {
       return res.status(500).json({
         success: false,
@@ -282,6 +296,19 @@ const editComment = async (req, res) => {
   try {
     const { commentId } = req.params;
     const { startingPercentage, endingPercentage, message } = req.body;
+
+    // Validate percentage range (0-100)
+    if (
+      startingPercentage < 0 ||
+      startingPercentage > 100 ||
+      endingPercentage < 0 ||
+      endingPercentage > 100
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Percentages must be between 0 and 100",
+      });
+    }
 
     if (startingPercentage > endingPercentage) {
       return res.status(400).json({

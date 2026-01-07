@@ -1,6 +1,9 @@
 const examModel = require("../models/examModel");
 const questionModel = require("../models/questionModel");
 const Subject = require("../models/subjectModel");
+const examSubmissionSchema = require("../models/examSubmissionSchema");
+const userPassSchema = require("../models/userPassSchema");
+const { retryTransaction } = require("../utils/transactionHelper");
 
 const generateUniqueExamCode = async () => {
   const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -143,6 +146,7 @@ const updateExam = async (req, res) => {
       questions,
       passPercentage,
       questionSelection,
+      examCode,
     } = req.body;
 
     if (
@@ -163,6 +167,69 @@ const updateExam = async (req, res) => {
         success: false,
         message: "Exam not found with the provided ID",
       });
+    }
+
+    // Check for active submissions (students currently taking exam)
+    const activeSubmissions = await examSubmissionSchema.countDocuments({
+      examId: examId,
+      status: "started",
+    });
+
+    if (activeSubmissions > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot modify exam: ${activeSubmissions} student(s) currently taking it`,
+      });
+    }
+
+    // Check for completed submissions
+    const completedSubmissions = await examSubmissionSchema.countDocuments({
+      examId: examId,
+      status: "completed",
+    });
+
+    if (completedSubmissions > 0) {
+      // Only allow non-breaking changes if submissions exist
+      const allowedFields = ["status", "shuffleQuestion"];
+      const requestedChanges = Object.keys(req.body);
+      const breakingChanges = requestedChanges.filter(
+        (field) => !allowedFields.includes(field)
+      );
+
+      if (breakingChanges.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot modify questions, marks, or pass percentage after ${completedSubmissions} submission(s) exist. Only status and shuffle settings can be changed.`,
+          breakingChanges: breakingChanges,
+        });
+      }
+
+      // Allow only status/shuffle updates
+      if (req.body.status) exam.status = req.body.status;
+      if (req.body.shuffleQuestion !== undefined)
+        exam.shuffleQuestion = req.body.shuffleQuestion;
+
+      await exam.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "Exam settings updated successfully",
+        data: exam,
+      });
+    }
+
+    // No submissions exist - allow full update
+
+    // Validate exam code uniqueness if changed
+    if (examCode && examCode !== exam.examCode) {
+      const duplicate = await examModel.findOne({ examCode });
+      if (duplicate) {
+        return res.status(409).json({
+          success: false,
+          message: "Exam code already exists",
+        });
+      }
+      exam.examCode = examCode;
     }
 
     const updatedQuestions = [];
@@ -200,7 +267,8 @@ const updateExam = async (req, res) => {
 
     exam.passPercentage = passPercentage || exam.passPercentage || 90;
     exam.questions = updatedQuestions;
-    exam.questionSelection = questionSelection ||
+    exam.questionSelection =
+      questionSelection ||
       exam.questionSelection || {
         MCQ: { startIndex: 0, count: 0 },
         MSQ: { startIndex: 0, count: 0 },
@@ -233,6 +301,20 @@ const updateShuffleQuestion = async (req, res) => {
         .status(404)
         .json({ success: false, message: "Exam not found" });
     }
+
+    // Check for active submissions before allowing shuffle change
+    const activeSubmissions = await examSubmissionSchema.countDocuments({
+      examId: id,
+      status: "started",
+    });
+
+    if (activeSubmissions > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot change shuffle setting: ${activeSubmissions} student(s) currently taking exam`,
+      });
+    }
+
     await examModel.findByIdAndUpdate(id, {
       shuffleQuestion: !exam.shuffleQuestion,
     });
@@ -307,9 +389,43 @@ const deleteExam = async (req, res) => {
         .json({ success: false, message: "Exam not found" });
     }
 
-    await questionModel.deleteMany({ _id: { $in: exam.questions } });
+    // Check for active submissions before allowing delete
+    const activeSubmissions = await examSubmissionSchema.countDocuments({
+      examId: id,
+      status: "started",
+    });
 
-    await examModel.findByIdAndDelete(id);
+    if (activeSubmissions > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot delete exam: ${activeSubmissions} student(s) currently taking it`,
+      });
+    }
+
+    // Delete exam and all related records in a transaction
+    await retryTransaction(async (session) => {
+      // Delete all submissions for this exam
+      await examSubmissionSchema.deleteMany({ examId: id }, { session });
+
+      // Delete all UserPass records for this exam
+      await userPassSchema.deleteMany(
+        {
+          subject: exam.subject,
+          subTopic: exam.subTopic,
+          level: exam.level,
+        },
+        { session }
+      );
+
+      // Delete all questions
+      await questionModel.deleteMany(
+        { _id: { $in: exam.questions } },
+        { session }
+      );
+
+      // Delete the exam itself
+      await examModel.findByIdAndDelete(id, { session });
+    });
 
     res.status(200).json({
       success: true,

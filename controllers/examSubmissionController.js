@@ -9,8 +9,11 @@ const { ensureMarkConfigExists } = require("./markController");
 const {
   evaluateQuestion,
   calculateMarks,
+  calculateTotalPossibleMarks,
+  validateMarks,
 } = require("../utils/ExamSubmissionHelper");
 const durationModel = require("../models/durationModel");
+const { retryTransaction } = require("../utils/transactionHelper");
 
 const getAllPassedSubmission = async (req, res) => {
   try {
@@ -326,184 +329,255 @@ const submitExam = async (req, res) => {
         .json({ success: false, message: "Invalid submission data" });
     }
 
-    // 1. Find the STARTED submission
-    const existingSubmission = await examSubmissionSchema.findOne({
-      userId: submissionData.userId,
-      examId: submissionData.examId,
-      status: "started",
-    });
-
-    if (!existingSubmission) {
-      return res.status(400).json({
-        success: false,
-        message: "No active exam session found. Please start the exam again.",
-      });
-    }
-
-    let examDetails = await examModel
-      .findById(submissionData.examId)
-      .populate({
-        path: "subject",
-        select: "name subtopics",
-      })
-      .populate("questions");
-
-    if (examDetails && examDetails.subject) {
-      const subtopic = examDetails.subject.subtopics.find((sub) =>
-        sub._id.equals(examDetails.subTopic)
+    // Execute entire submission within a transaction
+    const result = await retryTransaction(async (session) => {
+      // 1. Find and lock the STARTED submission atomically
+      const existingSubmission = await examSubmissionSchema.findOneAndUpdate(
+        {
+          userId: submissionData.userId,
+          examId: submissionData.examId,
+          status: "started",
+        },
+        { status: "processing" }, // Lock to prevent concurrent submissions
+        { session, new: false } // Return original document
       );
 
-      examDetails = examDetails.toObject();
-      examDetails.subTopic = subtopic ? subtopic._id : examDetails.subTopic;
-      examDetails.subTopic.name = subtopic ? subtopic.name : null;
-    }
+      if (!existingSubmission) {
+        throw new Error("NO_ACTIVE_SESSION");
+      }
 
-    if (!examDetails) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Exam not found" });
-    }
+      // 2. Get exam details
+      let examDetails = await examModel
+        .findById(submissionData.examId)
+        .populate({
+          path: "subject",
+          select: "name subtopics",
+        })
+        .populate("questions")
+        .session(session);
 
-    // 2. Server-side Duration Check
-    const durationConfig = await durationModel.findById("duration-in-seconds");
-    let allowedDuration = 0;
-    if (durationConfig) {
-        if (examDetails.level === 1) allowedDuration = durationConfig.level1Duration;
-        else if (examDetails.level === 2) allowedDuration = durationConfig.level2Duration;
-        else if (examDetails.level === 3) allowedDuration = durationConfig.level3Duration;
-        else if (examDetails.level === 4) allowedDuration = durationConfig.level4Duration;
-    }
+      if (examDetails && examDetails.subject) {
+        const subtopic = examDetails.subject.subtopics.find((sub) =>
+          sub._id.equals(examDetails.subTopic)
+        );
 
-    // Fallback if config missing or 0 (should not happen if configured correctly)
-    if (!allowedDuration) allowedDuration = 3600; // Default 1 hour safety
+        examDetails = examDetails.toObject();
+        examDetails.subTopic = subtopic ? subtopic._id : examDetails.subTopic;
+        examDetails.subTopic.name = subtopic ? subtopic.name : null;
+      }
 
-    const startTime = new Date(existingSubmission.createdAt).getTime();
-    const currentTime = Date.now();
-    const timeTakenSeconds = (currentTime - startTime) / 1000;
-    const GRACE_PERIOD_SECONDS = 60; // 1 minute grace for network latency
+      if (!examDetails) {
+        throw new Error("EXAM_NOT_FOUND");
+      }
 
-    if (timeTakenSeconds > allowedDuration + GRACE_PERIOD_SECONDS) {
-        // Mark as failed due to timeout? Or just reject?
-        // Let's mark as completed but failed.
+      // 3. Server-side Duration Check (NEVER trust client time)
+      const durationConfig = await durationModel
+        .findById("duration-in-seconds")
+        .session(session);
+      let allowedDuration = 0;
+      if (durationConfig) {
+        if (examDetails.level === 1)
+          allowedDuration = durationConfig.level1Duration;
+        else if (examDetails.level === 2)
+          allowedDuration = durationConfig.level2Duration;
+        else if (examDetails.level === 3)
+          allowedDuration = durationConfig.level3Duration;
+        else if (examDetails.level === 4)
+          allowedDuration = durationConfig.level4Duration;
+      }
+
+      // Fallback if config missing
+      if (!allowedDuration) allowedDuration = 3600; // Default 1 hour
+
+      const startTime = new Date(existingSubmission.createdAt).getTime();
+      const currentTime = Date.now();
+      const timeTakenSeconds = Math.floor((currentTime - startTime) / 1000);
+      const GRACE_PERIOD_SECONDS = 60; // 1 minute grace for network latency
+
+      if (timeTakenSeconds > allowedDuration + GRACE_PERIOD_SECONDS) {
+        // Mark as failed due to timeout
         existingSubmission.status = "completed";
         existingSubmission.pass = false;
         existingSubmission.obtainedMark = 0;
         existingSubmission.timetaken = allowedDuration; // Cap time
-        await existingSubmission.save();
+        await existingSubmission.save({ session });
 
-        return res.status(400).json({
-            success: false,
-            message: "Submission rejected: Time limit exceeded.",
-        });
-    }
+        throw new Error("TIME_LIMIT_EXCEEDED");
+      }
 
-    const mark = await markModel.findById("mark-based-on-levels");
-    if (!mark) {
-      await ensureMarkConfigExists();
-    }
+      // 4. Get mark configuration
+      const mark = await markModel.findById("mark-based-on-levels").session(session);
+      if (!mark) {
+        await ensureMarkConfigExists();
+      }
 
-    let positiveMark = mark.level1Mark,
-      negativeMark = mark.level1NegativeMark;
+      let positiveMark = mark.level1Mark,
+        negativeMark = mark.level1NegativeMark;
 
-    if (examDetails.level === 2) {
-      (positiveMark = mark.level2Mark),
-        (negativeMark = mark.level2NegativeMark);
-    } else if (examDetails.level === 3) {
-      (positiveMark = mark.level3Mark),
-        (negativeMark = mark.level3NegativeMark);
-    } else if (examDetails.level === 4) {
-      (positiveMark = mark.level4Mark),
-        (negativeMark = mark.level4NegativeMark);
-    }
+      if (examDetails.level === 2) {
+        positiveMark = mark.level2Mark;
+        negativeMark = mark.level2NegativeMark;
+      } else if (examDetails.level === 3) {
+        positiveMark = mark.level3Mark;
+        negativeMark = mark.level3NegativeMark;
+      } else if (examDetails.level === 4) {
+        positiveMark = mark.level4Mark;
+        negativeMark = mark.level4NegativeMark;
+      }
 
-    const enhancedExamData = submissionData.examData.map((studQuestion) => {
-      const question = examDetails.questions.find(
-        (q) => q._id.toString() === studQuestion.questionId
+      // 5. Create question lookup map ONCE (O(n) instead of O(n²))
+      const questionMap = new Map(
+        examDetails.questions.map(q => [q._id.toString(), q])
       );
-      if (!question) return studQuestion;
 
-      return evaluateQuestion(question, studQuestion);
+      // 6. Evaluate answers (O(n) with Map lookup)
+      const enhancedExamData = submissionData.examData.map((studQuestion) => {
+        const question = questionMap.get(studQuestion.questionId); // O(1) lookup!
+        if (!question) return studQuestion;
+        return evaluateQuestion(question, studQuestion);
+      });
+
+      // 7. Calculate marks (O(n) with Map lookup)
+      const studentObtainedMarks = submissionData.examData.reduce(
+        (total, studQuestion) => {
+          const question = questionMap.get(studQuestion.questionId); // O(1) lookup!
+          if (!question) return total;
+
+          return (
+            total +
+            calculateMarks(question, studQuestion, positiveMark, negativeMark)
+          );
+        },
+        0
+      );
+
+      // 8. Calculate total possible marks and pass mark (FIXED FORMULA)
+      const totalPossibleMarks = calculateTotalPossibleMarks(
+        submissionData.examData.length,
+        positiveMark
+      );
+      const passMark = (examDetails.passPercentage / 100) * totalPossibleMarks;
+
+      // 8. Validate marks (prevent negative or exceeding maximum)
+      const validatedMarks = validateMarks(studentObtainedMarks, totalPossibleMarks);
+
+      // 9. Calculate server-side time taken (cap at allowed duration)
+      const serverTimeTaken = Math.min(timeTakenSeconds, allowedDuration);
+
+      // 10. Update submission
+      existingSubmission.timetaken = serverTimeTaken;
+      existingSubmission.obtainedMark = Number(validatedMarks.toFixed(2));
+      existingSubmission.examData = enhancedExamData;
+      existingSubmission.pass = validatedMarks >= passMark;
+      existingSubmission.status = "completed";
+
+      await existingSubmission.save({ session });
+
+      // 11. Send email notification if attempt >= 5 and failed
+      if (existingSubmission.attemptNumber >= 5 && !existingSubmission.pass) {
+        // Email sending is async and non-critical, do it outside transaction
+        // Store flag to send email after transaction commits
+        existingSubmission._shouldNotifyEvaluators = true;
+      }
+
+      // 12. Create/Update UserPass record if passed (use upsert to prevent duplicates)
+      if (existingSubmission.pass) {
+        await userPassSchema.findOneAndUpdate(
+          {
+            userId: submissionData.userId,
+            subject: examDetails.subject,
+            subTopic: examDetails.subTopic,
+            level: examDetails.level,
+          },
+          { pass: true },
+          { upsert: true, session }
+        );
+      }
+
+      return {
+        submission: existingSubmission,
+        examDetails: examDetails,
+      };
     });
 
-    const studentObtainedMarks = submissionData.examData.reduce(
-      (total, studQuestion) => {
-        const question = examDetails.questions.find(
-          (q) => q._id.toString() === studQuestion.questionId
-        );
-        if (!question) return total;
+    // Send email notification outside transaction (non-critical)
+    if (result.submission._shouldNotifyEvaluators) {
+      // Move to background - don't block response
+      setImmediate(async () => {
+        try {
+          const evaluators = await userModel
+            .find({ role: "evaluator" })
+            .select("email");
+          const evaluatorEmails = evaluators.map((e) => e.email);
 
-        return (
-          total +
-          calculateMarks(question, studQuestion, positiveMark, negativeMark)
-        );
-      },
-      0
-    );
+          if (evaluatorEmails.length > 0) {
+            const userDetail = await userModel.findById(submissionData.userId);
 
-    const passMark =
-      (examDetails.passPercentage / 100) * submissionData.examData.length;
+            const subject = `Student Repeated Exam Attempts: ${userDetail.username}`;
+            const text = `The user ${userDetail.username} (Email: ${userDetail.email}) has attempted the exam ${result.submission.attemptNumber} times but has not yet passed. Exam Details: Subject - ${result.examDetails.subject.name}, Subtopic - ${result.examDetails.subTopic.name}, Level - ${result.examDetails.level}.`;
+            const html = `
+            <h2>Exam Attempt Alert</h2>
+            <p>The student <strong>${userDetail.username}</strong> has attempted the exam <strong>${result.submission.attemptNumber} times</strong> but has not yet passed.</p>
+            <h3>Exam Details:</h3>
+            <ul>
+              <li><strong>Subject:</strong> ${result.examDetails.subject.name}</li>
+              <li><strong>Subtopic:</strong> ${result.examDetails.subTopic.name}</li>
+              <li><strong>Level:</strong> ${result.examDetails.level}</li>
+            </ul>
+            <p>Please review the student's progress.</p>
+          `;
 
-    // 3. Update Existing Submission
-    existingSubmission.timetaken = submissionData.timetaken; // Trust client time? No, use calculated? User asked to not rely on client.
-    // Let's use Server calculated time or client time capped by server?
-    // "Calculate actual time taken using timestamps"
-    existingSubmission.timetaken = Math.min(timeTakenSeconds, allowedDuration); 
-    
-    existingSubmission.obtainedMark =
-      studentObtainedMarks > 0 ? Number(studentObtainedMarks.toFixed(2)) : 0;
-    existingSubmission.examData = enhancedExamData;
-    existingSubmission.pass = studentObtainedMarks >= passMark;
-    existingSubmission.status = "completed";
-    
-    await existingSubmission.save();
-
-    if (existingSubmission.attemptNumber >= 5 && passMark > studentObtainedMarks) {
-      const evaluators = await userModel
-        .find({ role: "evaluator" })
-        .select("email");
-      const evaluatorEmails = evaluators.map((e) => e.email);
-
-      if (evaluatorEmails.length > 0) {
-        const userDetail = await userModel.findById(submissionData.userId);
-
-        const subject = `Student Repeated Exam Attempts: ${userDetail.username}`;
-        const text = `The user ${userDetail.username} (Email: ${userDetail.email}) has attempted the exam ${existingSubmission.attemptNumber} times but has not yet passed. Exam Details: Subject - ${examDetails.subject.name}, Subtopic - ${examDetails.subTopic.name}, Level - ${examDetails.level}.`;
-        const html = `
-          <h2>Exam Attempt Alert</h2>
-          <p>The student <strong>${userDetail.username}</strong> has attempted the exam <strong>${existingSubmission.attemptNumber} times</strong> but has not yet passed.</p>
-          <h3>Exam Details:</h3>
-          <ul>
-            <li><strong>Subject:</strong> ${examDetails.subject.name}</li>
-            <li><strong>Subtopic:</strong> ${examDetails.subTopic.name}</li>
-            <li><strong>Level:</strong> ${examDetails.level}</li>
-          </ul>
-          <p>Please review the student's progress.</p>
-        `;
-
-        await sendMail(evaluatorEmails, subject, text, html);
-      }
-    }
-
-    if (studentObtainedMarks >= passMark) {
-      await userPassSchema.create({
-        userId: submissionData.userId,
-        subject: examDetails.subject,
-        subTopic: examDetails.subTopic,
-        level: examDetails.level,
-        pass: true,
+            await sendMail(evaluatorEmails, subject, text, html);
+          }
+        } catch (emailError) {
+          console.error("Failed to send evaluator notification:", emailError);
+          // Email failure doesn't affect submission success
+        }
       });
     }
 
     res.status(200).json({
       success: true,
       message: "Exam submitted successfully",
-      submittedData: existingSubmission,
+      submittedData: result.submission,
     });
   } catch (error) {
-    console.error(error);
+    console.error("Submission error:", error);
+
+    // Handle specific error cases
+    if (error.message === "NO_ACTIVE_SESSION") {
+      return res.status(400).json({
+        success: false,
+        message: "No active exam session found. Please start the exam again.",
+      });
+    }
+
+    if (error.message === "EXAM_NOT_FOUND") {
+      return res.status(404).json({
+        success: false,
+        message: "Exam not found",
+      });
+    }
+
+    if (error.message === "TIME_LIMIT_EXCEEDED") {
+      return res.status(400).json({
+        success: false,
+        message: "Submission rejected: Time limit exceeded.",
+      });
+    }
+
+    // Handle duplicate key errors (unique constraint violations)
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: "Duplicate submission detected. This exam has already been submitted.",
+      });
+    }
+
     res.status(500).json({
       success: false,
       message: "Unable to submit the exam",
+      error: error.message,
     });
   }
 };

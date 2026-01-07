@@ -39,6 +39,10 @@ const reviewSchema = new mongoose.Schema(
   }
 );
 
+// Performance indexes for aggregation queries
+reviewSchema.index({ subject: 1, subTopic: 1, level: 1 });
+reviewSchema.index({ evaluator: 1, createdAt: -1 });
+
 const reviewModel = mongoose.model("Review", reviewSchema);
 
 module.exports = reviewModel;

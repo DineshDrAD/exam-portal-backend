@@ -146,11 +146,46 @@ const getMarksByLevel = (mark, level) => {
   };
 };
 
+/**
+ * Calculate total possible marks for an exam
+ * @param {Number} questionCount - Number of questions in exam
+ * @param {Number} positiveMark - Marks per correct answer
+ * @returns {Number} Total possible marks
+ */
+const calculateTotalPossibleMarks = (questionCount, positiveMark) => {
+  return questionCount * positiveMark;
+};
 
+/**
+ * Validate and constrain marks within valid range
+ * @param {Number} obtainedMarks - Marks obtained by student
+ * @param {Number} maximumMarks - Maximum possible marks
+ * @returns {Number} Validated marks (0 <= marks <= maximum)
+ */
+const validateMarks = (obtainedMarks, maximumMarks) => {
+  // Floor at 0 (prevent negative total)
+  if (obtainedMarks < 0) {
+    console.warn(`Marks below zero detected: ${obtainedMarks}, setting to 0`);
+    return 0;
+  }
+
+  // Cap at maximum (prevent exceeding total)
+  if (obtainedMarks > maximumMarks) {
+    console.error(
+      `Marks exceed maximum! Obtained: ${obtainedMarks}, Maximum: ${maximumMarks}, capping at maximum`
+    );
+    return maximumMarks;
+  }
+
+  return obtainedMarks;
+};
 
 module.exports = {
   evaluateQuestion,
   calculateMarks,
   getMarksByLevel,
+  calculateTotalPossibleMarks,
+  validateMarks,
 };
+
 

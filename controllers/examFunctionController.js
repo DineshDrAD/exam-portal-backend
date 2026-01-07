@@ -5,6 +5,7 @@ const questionModel = require("../models/questionModel");
 const Subject = require("../models/subjectModel");
 const userPassSchema = require("../models/userPassSchema");
 const { ensureMarkConfigExists } = require("./markController");
+const { retryTransaction } = require("../utils/transactionHelper");
 
 const getEligibleExamForUser = async (req, res) => {
   try {
@@ -279,7 +280,6 @@ const deletePassedExam = async (req, res) => {
       });
     }
 
-    await userPassSchema.deleteOne({ _id: existingPass._id });
     const examData = await examModel.findOne({
       subject: subjectId,
       subTopic: subTopicId,
@@ -287,10 +287,18 @@ const deletePassedExam = async (req, res) => {
       status: "active",
     });
 
-    await examSubmissionSchema.deleteOne({
-      userId,
-      examId: examData._id,
-      pass: true,
+    // Delete both UserPass and ExamSubmission in a transaction
+    await retryTransaction(async (session) => {
+      await userPassSchema.deleteOne({ _id: existingPass._id }, { session });
+
+      await examSubmissionSchema.deleteOne(
+        {
+          userId,
+          examId: examData._id,
+          pass: true,
+        },
+        { session }
+      );
     });
 
     res.status(200).json({

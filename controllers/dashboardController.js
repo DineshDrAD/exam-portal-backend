@@ -7,79 +7,171 @@ const markModel = require("../models/markModel");
 // Get all exams overview
 const getAllExamsOverview = async (req, res) => {
   try {
-    const exams = await Exam.find({ status: "active" })
-      .populate("subject", "name subtopics")
-      .lean();
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const skip = (page - 1) * limit;
 
-    const examOverviews = await Promise.all(
-      exams.map(async (exam) => {
-        const submissions = await ExamSubmission.find({ examId: exam._id });
-
-        const totalSubmissions = submissions.length;
-        const marks = submissions.map((s) => s.obtainedMark || 0);
-
-        const avgScore =
-          totalSubmissions > 0
-            ? marks.reduce((a, b) => a + b, 0) / totalSubmissions
-            : 0;
-
-        const passedStudents = submissions.filter((s) => s.pass).length;
-        const passRate =
-          totalSubmissions > 0 ? (passedStudents / totalSubmissions) * 100 : 0;
-
-        const highestMark = totalSubmissions > 0 ? Math.max(...marks) : 0;
-        const lowestMark = totalSubmissions > 0 ? Math.min(...marks) : 0;
-
-        // 🔑 Find subtopic inside subject
-        const subTopicObj = exam.subject?.subtopics?.find(
-          (st) => st._id.toString() === exam.subTopic.toString()
-        );
-
-        return {
-          _id: exam._id,
-          examCode: exam.examCode,
-          subject: {
-            _id: exam.subject._id,
-            name: exam.subject.name,
+    // Single aggregation instead of N+1
+    const [examsData, totalCount] = await Promise.all([
+      Exam.aggregate([
+        { $match: { status: "active" } },
+        { $skip: skip },
+        { $limit: limit },
+        {
+          $lookup: {
+            from: "subjects",
+            localField: "subject",
+            foreignField: "_id",
+            as: "subjectData",
           },
-          subTopic: subTopicObj
-            ? { _id: subTopicObj._id, name: subTopicObj.name }
-            : null,
-          level: exam.level,
-          totalSubmissions,
-          avgScore: Number(avgScore.toFixed(2)),
-          passRate: Number(passRate.toFixed(2)),
-          highestMark,
-          lowestMark,
-        };
-      })
-    );
+        },
+        { $unwind: { path: "$subjectData", preserveNullAndEmptyArrays: true } },
+        {
+          $lookup: {
+            from: "examsubmissions",
+            localField: "_id",
+            foreignField: "examId",
+            as: "submissions",
+          },
+        },
+        {
+          $project: {
+            _id: 1,
+            examCode: 1,
+            level: 1,
+            subTopic: 1,
+            "subjectData._id": 1,
+            "subjectData.name": 1,
+            "subjectData.subtopics": 1,
+            totalSubmissions: { $size: "$submissions" },
+            passedStudents: {
+              $size: {
+                $filter: {
+                  input: "$submissions",
+                  as: "sub",
+                  cond: { $eq: ["$$sub.pass", true] },
+                },
+              },
+            },
+            marks: {
+              $map: {
+                input: "$submissions",
+                as: "sub",
+                in: { $ifNull: ["$$sub.obtainedMark", 0] },
+              },
+            },
+          },
+        },
+        {
+          $addFields: {
+            avgScore: {
+              $cond: {
+                if: { $gt: ["$totalSubmissions", 0] },
+                then: { $avg: "$marks" },
+                else: 0,
+              },
+            },
+            passRate: {
+              $cond: {
+                if: { $gt: ["$totalSubmissions", 0] },
+                then: {
+                  $multiply: [
+                    { $divide: ["$passedStudents", "$totalSubmissions"] },
+                    100,
+                  ],
+                },
+                else: 0,
+              },
+            },
+            highestMark: {
+              $cond: {
+                if: { $gt: ["$totalSubmissions", 0] },
+                then: { $max: "$marks" },
+                else: 0,
+              },
+            },
+            lowestMark: {
+              $cond: {
+                if: { $gt: ["$totalSubmissions", 0] },
+                then: { $min: "$marks" },
+                else: 0,
+              },
+            },
+          },
+        },
+        {
+          $project: {
+            _id: 1,
+            examCode: 1,
+            subject: {
+              _id: "$subjectData._id",
+              name: "$subjectData.name",
+            },
+            subTopic: {
+              $let: {
+                vars: {
+                  subtopicObj: {
+                    $arrayElemAt: [
+                      {
+                        $filter: {
+                          input: "$subjectData.subtopics",
+                          as: "st",
+                          cond: { $eq: ["$$st._id", "$subTopic"] },
+                        },
+                      },
+                      0,
+                    ],
+                  },
+                },
+                in: {
+                  _id: "$$subtopicObj._id",
+                  name: "$$subtopicObj.name",
+                },
+              },
+            },
+            level: 1,
+            totalSubmissions: 1,
+            avgScore: { $round: ["$avgScore", 2] },
+            passRate: { $round: ["$passRate", 2] },
+            highestMark: 1,
+            lowestMark: 1,
+          },
+        },
+      ]),
+      Exam.countDocuments({ status: "active" }),
+    ]);
 
     // Calculate overall statistics
-    const totalStudents = examOverviews.reduce(
+    const totalStudents = examsData.reduce(
       (sum, exam) => sum + exam.totalSubmissions,
       0
     );
     const overallAvgScore =
-      examOverviews.length > 0
-        ? examOverviews.reduce((sum, exam) => sum + exam.avgScore, 0) /
-          examOverviews.length
+      examsData.length > 0
+        ? examsData.reduce((sum, exam) => sum + exam.avgScore, 0) /
+          examsData.length
         : 0;
     const overallPassRate =
-      examOverviews.length > 0
-        ? examOverviews.reduce((sum, exam) => sum + exam.passRate, 0) /
-          examOverviews.length
+      examsData.length > 0
+        ? examsData.reduce((sum, exam) => sum + exam.passRate, 0) /
+          examsData.length
         : 0;
 
     res.status(200).json({
       success: true,
       data: {
-        exams: examOverviews,
+        exams: examsData,
         statistics: {
           totalStudents,
           overallAvgScore: parseFloat(overallAvgScore.toFixed(2)),
           overallPassRate: parseFloat(overallPassRate.toFixed(2)),
-          totalExams: examOverviews.length,
+          totalExams: totalCount,
+        },
+        pagination: {
+          page,
+          limit,
+          totalPages: Math.ceil(totalCount / limit),
+          hasMore: page * limit < totalCount,
         },
       },
     });
@@ -315,72 +407,144 @@ const getExamDetailedAnalysis = async (req, res) => {
 // Get all students overview
 const getAllStudentsOverview = async (req, res) => {
   try {
-    const students = await User.find({ role: "student" })
-      .select("username email registerNumber")
-      .sort({ username: 1 })
-      .lean();
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const skip = (page - 1) * limit;
 
-    const studentOverviews = await Promise.all(
-      students.map(async (student) => {
-        const submissions = await ExamSubmission.find({ userId: student._id })
-          .populate("examId", "examCode subject")
-          .lean();
-
-        const totalExams = submissions.length;
-
-        const totalPercentageArray =
-          submissions.length > 0
-            ? submissions.map((exam) => {
-                return (exam.obtainedMark / exam.examData.length) * 100;
-              })
-            : [];
-
-        const avgPercentage =
-          totalPercentageArray.length > 0
-            ? totalPercentageArray.reduce(
-                (sum, percentage) => sum + percentage,
-                0
-              ) / totalPercentageArray.length
-            : 0;
-
-        const passedExams = submissions.filter((s) => s.pass).length;
-        const passRate = totalExams > 0 ? (passedExams / totalExams) * 100 : 0;
-
-        // Calculate total correct/attempted
-        let totalCorrect = 0;
-        let totalAttempted = 0;
-
-        submissions.forEach((sub) => {
-          sub.examData.forEach((q) => {
-            if (q.studentAnswer !== null && q.studentAnswer !== undefined) {
-              totalAttempted++;
-              const isCorrect =
-                JSON.stringify(q.studentAnswer) ===
-                JSON.stringify(q.correctAnswer);
-              if (isCorrect) totalCorrect++;
-            }
-          });
-        });
-
-        return {
-          _id: student._id,
-          name: student.username,
-          email: student.email,
-          registerNumber: student.registerNumber,
-          totalExams,
-          avgPercentage: parseFloat(avgPercentage.toFixed(2)),
-          passRate: parseFloat(passRate.toFixed(2)),
-          totalCorrect,
-          totalAttempted,
-        };
-      })
-    );
+    // Single aggregation query instead of N+1
+    const [studentsData, totalCount] = await Promise.all([
+      User.aggregate([
+        { $match: { role: "student" } },
+        { $sort: { username: 1 } },
+        { $skip: skip },
+        { $limit: limit },
+        {
+          $lookup: {
+            from: "examsubmissions",
+            localField: "_id",
+            foreignField: "userId",
+            as: "submissions",
+          },
+        },
+        {
+          $project: {
+            _id: 1,
+            username: 1,
+            email: 1,
+            registerNumber: 1,
+            totalExams: { $size: "$submissions" },
+            passedExams: {
+              $size: {
+                $filter: {
+                  input: "$submissions",
+                  as: "sub",
+                  cond: { $eq: ["$$sub.pass", true] },
+                },
+              },
+            },
+            totalCorrect: {
+              $sum: {
+                $map: {
+                  input: "$submissions",
+                  as: "sub",
+                  in: {
+                    $size: {
+                      $filter: {
+                        input: "$$sub.examData",
+                        as: "q",
+                        cond: { $eq: ["$$q.isRight", "Correct"] },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            totalAttempted: {
+              $sum: {
+                $map: {
+                  input: "$submissions",
+                  as: "sub",
+                  in: { $size: "$$sub.examData" },
+                },
+              },
+            },
+            avgPercentage: {
+              $cond: {
+                if: { $gt: [{ $size: "$submissions" }, 0] },
+                then: {
+                  $avg: {
+                    $map: {
+                      input: "$submissions",
+                      as: "sub",
+                      in: {
+                        $cond: {
+                          if: { $gt: [{ $size: "$$sub.examData" }, 0] },
+                          then: {
+                            $multiply: [
+                              {
+                                $divide: [
+                                  "$$sub.obtainedMark",
+                                  { $size: "$$sub.examData" },
+                                ],
+                              },
+                              100,
+                            ],
+                          },
+                          else: 0,
+                        },
+                      },
+                    },
+                  },
+                },
+                else: 0,
+              },
+            },
+          },
+        },
+        {
+          $addFields: {
+            passRate: {
+              $cond: {
+                if: { $gt: ["$totalExams", 0] },
+                then: {
+                  $multiply: [
+                    { $divide: ["$passedExams", "$totalExams"] },
+                    100,
+                  ],
+                },
+                else: 0,
+              },
+            },
+          },
+        },
+        {
+          $project: {
+            _id: 1,
+            name: "$username",
+            email: 1,
+            registerNumber: 1,
+            totalExams: 1,
+            avgPercentage: { $round: ["$avgPercentage", 2] },
+            passRate: { $round: ["$passRate", 2] },
+            totalCorrect: 1,
+            totalAttempted: 1,
+          },
+        },
+      ]),
+      User.countDocuments({ role: "student" }),
+    ]);
 
     res.status(200).json({
       success: true,
       data: {
-        students: studentOverviews,
-        totalStudents: studentOverviews.length,
+        students: studentsData,
+        totalStudents: totalCount,
+        pagination: {
+          page,
+          limit,
+          totalPages: Math.ceil(totalCount / limit),
+          hasMore: page * limit < totalCount,
+        },
       },
     });
   } catch (error) {
