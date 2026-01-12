@@ -318,7 +318,6 @@ const getExamSubmissionById = async (req, res) => {
   }
 };
 
-
 const submitExam = async (req, res) => {
   try {
     const { submissionData } = req.body;
@@ -392,7 +391,7 @@ const submitExam = async (req, res) => {
       const startTime = new Date(existingSubmission.createdAt).getTime();
       const currentTime = Date.now();
       const timeTakenSeconds = Math.floor((currentTime - startTime) / 1000);
-      const GRACE_PERIOD_SECONDS = 60; // 1 minute grace for network latency
+      const GRACE_PERIOD_SECONDS = allowedDuration * 0.1 || 300; // 5 minute grace for network latency
 
       if (timeTakenSeconds > allowedDuration + GRACE_PERIOD_SECONDS) {
         // Mark as failed due to timeout
@@ -406,7 +405,9 @@ const submitExam = async (req, res) => {
       }
 
       // 4. Get mark configuration
-      const mark = await markModel.findById("mark-based-on-levels").session(session);
+      const mark = await markModel
+        .findById("mark-based-on-levels")
+        .session(session);
       if (!mark) {
         await ensureMarkConfigExists();
       }
@@ -427,7 +428,7 @@ const submitExam = async (req, res) => {
 
       // 5. Create question lookup map ONCE (O(n) instead of O(n²))
       const questionMap = new Map(
-        examDetails.questions.map(q => [q._id.toString(), q])
+        examDetails.questions.map((q) => [q._id.toString(), q])
       );
 
       // 6. Evaluate answers (O(n) with Map lookup)
@@ -459,7 +460,10 @@ const submitExam = async (req, res) => {
       const passMark = (examDetails.passPercentage / 100) * totalPossibleMarks;
 
       // 8. Validate marks (prevent negative or exceeding maximum)
-      const validatedMarks = validateMarks(studentObtainedMarks, totalPossibleMarks);
+      const validatedMarks = validateMarks(
+        studentObtainedMarks,
+        totalPossibleMarks
+      );
 
       // 9. Calculate server-side time taken (cap at allowed duration)
       const serverTimeTaken = Math.min(timeTakenSeconds, allowedDuration);
@@ -570,7 +574,8 @@ const submitExam = async (req, res) => {
     if (error.code === 11000) {
       return res.status(409).json({
         success: false,
-        message: "Duplicate submission detected. This exam has already been submitted.",
+        message:
+          "Duplicate submission detected. This exam has already been submitted.",
       });
     }
 

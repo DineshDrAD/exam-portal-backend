@@ -14,7 +14,7 @@ const {
 router.get(
   "/get",
   verifyToken,
-  authorizeRoles("admin", "evaluator"),
+  authorizeRoles("admin", "evaluator", "student"),
   getSubjects
 );
 router.post("/create", verifyToken, authorizeRoles("admin"), createSubject);
