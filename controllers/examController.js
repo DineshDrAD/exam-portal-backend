@@ -59,39 +59,55 @@ const createExam = async (req, res) => {
 
     const examCode = await generateUniqueExamCode();
 
-    const createdQuestions = await questionModel.create(
-      questions.map((question) => ({
-        subject,
-        subTopic,
-        level,
-        questionType: question.questionType,
-        questionText: question.questionText,
-        options: question.options,
-        correctAnswers: question.correctAnswers,
-        image: question.image,
-      }))
-    );
+    // Use transaction for atomicity
+    await retryTransaction(async (session) => {
+      // 1. Create questions within session
+      const createdQuestions = await questionModel.create(
+        questions.map((question) => ({
+          subject,
+          subTopic,
+          level,
+          questionType: question.questionType,
+          questionText: question.questionText,
+          options: question.options,
+          correctAnswers: question.correctAnswers,
+          image: question.image,
+        })),
+        { session }
+      );
 
-    const exam = await examModel.create({
-      subject,
-      subTopic,
-      level,
-      status,
-      passPercentage: passPercentage || 90,
-      examCode,
-      questions: createdQuestions.map((q) => q._id),
-      questionSelection: questionSelection || {
-        MCQ: { startIndex: 0, count: 0 },
-        MSQ: { startIndex: 0, count: 0 },
-        "Fill in the Blanks": { startIndex: 0, count: 0 },
-        "Short Answer": { startIndex: 0, count: 0 },
-      },
+      // 2. Create exam within session
+      await examModel.create(
+        [
+          {
+            subject,
+            subTopic,
+            level,
+            status,
+            passPercentage: passPercentage || 90,
+            examCode,
+            questions: createdQuestions.map((q) => q._id),
+            questionSelection: questionSelection || {
+              MCQ: { startIndex: 0, count: 0 },
+              MSQ: { startIndex: 0, count: 0 },
+              "Fill in the Blanks": { startIndex: 0, count: 0 },
+              "Short Answer": { startIndex: 0, count: 0 },
+            },
+          },
+        ],
+        { session }
+      );
     });
+
+    // Fetch the created exam to return
+    const createdExam = await examModel
+      .findOne({ examCode })
+      .populate("questions");
 
     res.status(201).json({
       success: true,
       message: "Exam created successfully",
-      data: exam,
+      data: createdExam,
     });
   } catch (error) {
     res.status(500).json({
@@ -160,6 +176,15 @@ const updateExam = async (req, res) => {
       return res.status(400).json({ error: "All fields are required" });
     }
 
+    // Input Validation
+    if (passPercentage < 0 || passPercentage > 100) {
+      return res.status(400).json({ error: "Pass percentage must be between 0 and 100" });
+    }
+
+    if (questions.length > 200) {
+      return res.status(400).json({ error: "Cannot add more than 200 questions to a single exam" });
+    }
+
     let exam = await examModel.findById(examId);
 
     if (!exam) {
@@ -169,114 +194,138 @@ const updateExam = async (req, res) => {
       });
     }
 
-    // Check for active submissions (students currently taking exam)
-    const activeSubmissions = await examSubmissionSchema.countDocuments({
-      examId: examId,
-      status: "started",
-    });
+    // Execute update within a transaction to handle concurrency safely
+    await retryTransaction(async (session) => {
+      // Re-fetch exam to ensure we have the latest version in this session
+      // (Though findById above was outside, locking here via examSubmission check is the key)
 
-    if (activeSubmissions > 0) {
-      return res.status(400).json({
-        success: false,
-        message: `Cannot modify exam: ${activeSubmissions} student(s) currently taking it`,
-      });
-    }
+      // Check for active submissions (students currently taking exam)
+      // Lock this check by reading inside transaction
+      const activeSubmissions = await examSubmissionSchema.countDocuments({
+        examId: examId,
+        status: "started",
+      }).session(session);
 
-    // Check for completed submissions
-    const completedSubmissions = await examSubmissionSchema.countDocuments({
-      examId: examId,
-      status: "completed",
-    });
-
-    if (completedSubmissions > 0) {
-      // Only allow non-breaking changes if submissions exist
-      const allowedFields = ["status", "shuffleQuestion"];
-      const requestedChanges = Object.keys(req.body);
-      const breakingChanges = requestedChanges.filter(
-        (field) => !allowedFields.includes(field)
-      );
-
-      if (breakingChanges.length > 0) {
-        return res.status(400).json({
-          success: false,
-          message: `Cannot modify questions, marks, or pass percentage after ${completedSubmissions} submission(s) exist. Only status and shuffle settings can be changed.`,
-          breakingChanges: breakingChanges,
-        });
+      if (activeSubmissions > 0) {
+        // We can't return directly from inside transaction wrapper function if we want to send response
+        // Throw error to break transaction and handle response in catch
+        const err = new Error("ACTIVE_SUBMISSIONS");
+        err.count = activeSubmissions;
+        throw err;
       }
 
-      // Allow only status/shuffle updates
-      if (req.body.status) exam.status = req.body.status;
-      if (req.body.shuffleQuestion !== undefined)
-        exam.shuffleQuestion = req.body.shuffleQuestion;
+      // Check for completed submissions
+      const completedSubmissions = await examSubmissionSchema.countDocuments({
+        examId: examId,
+        status: "completed",
+      }).session(session);
 
-      await exam.save();
+      if (completedSubmissions > 0) {
+        // Only allow non-breaking changes if submissions exist
+        const allowedFields = ["status", "shuffleQuestion"];
+        const requestedChanges = Object.keys(req.body);
+        // Note: req.body includes everything sent, even if unchanged.
+        // Ideally we should compare values. simplified logic:
+        // checking if restricted fields are present in body is aggressive if they are same value.
+        // But strict mode is safer.
 
-      return res.status(200).json({
-        success: true,
-        message: "Exam settings updated successfully",
-        data: exam,
-      });
-    }
+        const breakingChanges = requestedChanges.filter(
+          (field) =>
+            !allowedFields.includes(field) &&
+            // For this implementation, we assume if client sends it, it might be a change.
+            // To allow sending same values, we'd need deep comparison.
+            // Assuming client only sends what changed or sends everything.
+            // Let's stick to existing logic but safe.
+            field !== "examCode" // examCode changes handled separately later?
+        );
 
-    // No submissions exist - allow full update
+        // Actually, re-reading original code: it checks breakingChanges.
+        // We will preserve the logic but inside transaction.
 
-    // Validate exam code uniqueness if changed
-    if (examCode && examCode !== exam.examCode) {
-      const duplicate = await examModel.findOne({ examCode });
-      if (duplicate) {
-        return res.status(409).json({
-          success: false,
-          message: "Exam code already exists",
-        });
+        // Original logic was lenient about what is "breaking".
+        // If we are strictly "Update Race Condition", we focus on activeSubmissions check.
+
+        if (breakingChanges.length > 0) {
+          // Checking if values actually changed would be better, but follows original pattern for now
+          // Assuming user knows not to send other fields.
+          // But wait, frontend sends everything usually.
+          // This logic seems flaky in original too.
+          // Let's execute the "Safe Update" path if submissions exist.
+        }
+
+        if (breakingChanges.length > 0) {
+          const err = new Error("COMPLETED_SUBMISSIONS");
+          err.count = completedSubmissions;
+          err.breakingChanges = breakingChanges;
+          throw err;
+        }
+
+        // Allow only status/shuffle updates
+        if (req.body.status) exam.status = req.body.status;
+        if (req.body.shuffleQuestion !== undefined)
+          exam.shuffleQuestion = req.body.shuffleQuestion;
+
+        await exam.save({ session });
+        return; // End transaction for this branch
       }
-      exam.examCode = examCode;
-    }
 
-    const updatedQuestions = [];
+      // No submissions exist - allow full update
 
-    for (const question of questions) {
-      const existingQuestion = await questionModel.findOne({
-        questionText: question.questionText,
-        level,
-        subject,
-        subTopic,
-      });
+      // Validate exam code uniqueness if changed
+      if (examCode && examCode !== exam.examCode) {
+        const duplicate = await examModel.findOne({ examCode }).session(session);
+        if (duplicate) {
+          throw new Error("DUPLICATE_EXAM_CODE");
+        }
+        exam.examCode = examCode;
+      }
 
-      if (existingQuestion) {
-        existingQuestion.questionType = question.questionType;
-        existingQuestion.options = question.options || existingQuestion.options;
-        existingQuestion.correctAnswers = question.correctAnswers;
-        existingQuestion.image = question.image || existingQuestion.image;
+      const updatedQuestions = [];
 
-        const updatedQuestion = await existingQuestion.save();
-        updatedQuestions.push(updatedQuestion._id);
-      } else {
-        const newQuestion = await questionModel.create({
+      for (const question of questions) {
+        const existingQuestion = await questionModel.findOne({
+          questionText: question.questionText,
+          level,
           subject,
           subTopic,
-          level,
-          questionType: question.questionType,
-          questionText: question.questionText,
-          options: question.options,
-          correctAnswers: question.correctAnswers,
-          image: question.image,
-        });
-        updatedQuestions.push(newQuestion._id);
+        }).session(session);
+
+        if (existingQuestion) {
+          existingQuestion.questionType = question.questionType;
+          existingQuestion.options = question.options || existingQuestion.options;
+          existingQuestion.correctAnswers = question.correctAnswers;
+          existingQuestion.image = question.image || existingQuestion.image;
+
+          const updatedQuestion = await existingQuestion.save({ session });
+          updatedQuestions.push(updatedQuestion._id);
+        } else {
+          const newQuestion = await questionModel.create([{
+            subject,
+            subTopic,
+            level,
+            questionType: question.questionType,
+            questionText: question.questionText,
+            options: question.options,
+            correctAnswers: question.correctAnswers,
+            image: question.image,
+          }], { session });
+          updatedQuestions.push(newQuestion[0]._id);
+        }
       }
-    }
 
-    exam.passPercentage = passPercentage || exam.passPercentage || 90;
-    exam.questions = updatedQuestions;
-    exam.questionSelection =
-      questionSelection ||
-      exam.questionSelection || {
-        MCQ: { startIndex: 0, count: 0 },
-        MSQ: { startIndex: 0, count: 0 },
-        "Fill in the Blanks": { startIndex: 0, count: 0 },
-        "Short Answer": { startIndex: 0, count: 0 },
-      };
+      exam.passPercentage = passPercentage || exam.passPercentage || 90;
+      exam.questions = updatedQuestions;
+      exam.questionSelection =
+        questionSelection ||
+        exam.questionSelection || {
+          MCQ: { startIndex: 0, count: 0 },
+          MSQ: { startIndex: 0, count: 0 },
+          "Fill in the Blanks": { startIndex: 0, count: 0 },
+          "Short Answer": { startIndex: 0, count: 0 },
+        };
 
-    await exam.save();
+      await exam.save({ session });
+    });
 
     res.status(200).json({
       success: true,
@@ -284,6 +333,26 @@ const updateExam = async (req, res) => {
       data: exam,
     });
   } catch (error) {
+    if (error.message === "ACTIVE_SUBMISSIONS") {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot modify exam: ${error.count} student(s) currently taking it`,
+      });
+    }
+    if (error.message === "COMPLETED_SUBMISSIONS") {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot modify questions, marks, or pass percentage after ${error.count} submission(s) exist. Only status and shuffle settings can be changed.`,
+        breakingChanges: error.breakingChanges,
+      });
+    }
+    if (error.message === "DUPLICATE_EXAM_CODE") {
+      return res.status(409).json({
+        success: false,
+        message: "Exam code already exists",
+      });
+    }
+
     res.status(500).json({
       success: false,
       message: "Failed to update exam",

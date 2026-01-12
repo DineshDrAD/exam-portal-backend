@@ -28,7 +28,23 @@ router.post(
   "/register/bulk-upload",
   verifyToken,
   authorizeRoles("admin"),
-  upload.single("file"),
+  (req, res, next) => {
+    upload.single("file")(req, res, (err) => {
+      if (err) {
+        // Multer errors
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(413).json({ 
+            error: 'File too large. Maximum size is 5MB.' 
+          });
+        }
+        if (err.message.includes('Invalid file')) {
+          return res.status(400).json({ error: err.message });
+        }
+        return res.status(400).json({ error: err.message });
+      }
+      next();
+    });
+  },
   bulkCreateUsers
 );
 router.post("/login", loginUser);

@@ -373,25 +373,29 @@ const submitExam = async (req, res) => {
       const durationConfig = await durationModel
         .findById("duration-in-seconds")
         .session(session);
-      let allowedDuration = 0;
+      let perQuestionDuration = 0;
       if (durationConfig) {
         if (examDetails.level === 1)
-          allowedDuration = durationConfig.level1Duration;
+          perQuestionDuration = durationConfig.level1Duration;
         else if (examDetails.level === 2)
-          allowedDuration = durationConfig.level2Duration;
+          perQuestionDuration = durationConfig.level2Duration;
         else if (examDetails.level === 3)
-          allowedDuration = durationConfig.level3Duration;
+          perQuestionDuration = durationConfig.level3Duration;
         else if (examDetails.level === 4)
-          allowedDuration = durationConfig.level4Duration;
+          perQuestionDuration = durationConfig.level4Duration;
       }
 
       // Fallback if config missing
-      if (!allowedDuration) allowedDuration = 3600; // Default 1 hour
+      if (!perQuestionDuration) perQuestionDuration = 3600; // Default 1 hour
+
+      // CRITICAL FIX: Calculate TOTAL exam duration (not per-question)
+      // This must match the frontend calculation in examFunctionRoute.js
+      const allowedDuration = examDetails.questions.length * perQuestionDuration;
 
       const startTime = new Date(existingSubmission.createdAt).getTime();
       const currentTime = Date.now();
       const timeTakenSeconds = Math.floor((currentTime - startTime) / 1000);
-      const GRACE_PERIOD_SECONDS = allowedDuration * 0.1 || 300; // 5 minute grace for network latency
+      const GRACE_PERIOD_SECONDS = Math.max(allowedDuration * 0.1, 300); // 10% grace or 5 min minimum
 
       if (timeTakenSeconds > allowedDuration + GRACE_PERIOD_SECONDS) {
         // Mark as failed due to timeout

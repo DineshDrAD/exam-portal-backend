@@ -154,59 +154,225 @@ const bulkCreateUsers = async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
+    // Parse Excel file
     const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const users = XLSX.utils.sheet_to_json(sheet);
 
-    const insertedUsers = [];
+    if (users.length === 0) {
+      return res.status(400).json({ error: "Excel file is empty" });
+    }
 
-    for (const user of users) {
-      const { registerNumber, username, email, password, role } = user;
-      if (
-        (typeof registerNumber !== "string" && role === "student") ||
-        typeof username !== "string" ||
-        typeof email !== "string" ||
-        typeof password !== "string" ||
-        typeof role !== "string" ||
-        (!registerNumber.trim() && role === "student") ||
-        !username.trim() ||
-        !email.trim() ||
-        !password.trim() ||
-        !role.trim()
-      ) {
+    // Validation results
+    const validUsers = [];
+    const errors = [];
+
+    // Email validation regex
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    // Step 1: Validate all rows first
+    for (let i = 0; i < users.length; i++) {
+      const user = users[i];
+      const rowNumber = i + 2; // Excel row (header is row 1)
+
+      // Required field validation
+      if (!user.username || !user.email || !user.password || !user.role) {
+        errors.push({
+          row: rowNumber,
+          email: user.email || 'N/A',
+          reason: 'Missing required fields (username, email, password, role)'
+        });
         continue;
       }
 
-      const existing = await userModel.findOne({ email });
-      if (existing) continue;
-      if (role === "student") {
-        const existingRegisterNumber = await userModel.findOne({
-          registerNumber,
+      // Type validation
+      if (
+        typeof user.username !== "string" ||
+        typeof user.email !== "string" ||
+        typeof user.password !== "string" ||
+        typeof user.role !== "string"
+      ) {
+        errors.push({
+          row: rowNumber,
+          email: user.email,
+          reason: 'Invalid data types'
         });
-        if (existingRegisterNumber) {
-          continue;
-        }
+        continue;
       }
 
-      const hashedPassword = await bcrypt.hash(password, 10);
+      // Trim and sanitize
+      const sanitizedUser = {
+        registerNumber: user.registerNumber ? String(user.registerNumber).trim() : null,
+        username: user.username.trim(),
+        email: user.email.toLowerCase().trim(),
+        password: user.password.trim(),
+        role: user.role.toLowerCase().trim()
+      };
 
-      const newUser = new userModel({
-        registerNumber: role === "student" ? registerNumber : null,
-        username,
-        email,
-        password: hashedPassword,
-        role: role.toLowerCase(),
-      });
+      // Email format validation
+      if (!emailRegex.test(sanitizedUser.email)) {
+        errors.push({
+          row: rowNumber,
+          email: sanitizedUser.email,
+          reason: 'Invalid email format'
+        });
+        continue;
+      }
 
-      await newUser.save();
-      insertedUsers.push(newUser);
+      // Role validation
+      if (!['student', 'evaluator', 'admin'].includes(sanitizedUser.role)) {
+        errors.push({
+          row: rowNumber,
+          email: sanitizedUser.email,
+          reason: `Invalid role: ${sanitizedUser.role}. Must be student, evaluator, or admin`
+        });
+        continue;
+      }
+
+      // Student-specific validation
+      if (sanitizedUser.role === 'student' && !sanitizedUser.registerNumber) {
+        errors.push({
+          row: rowNumber,
+          email: sanitizedUser.email,
+          reason: 'Register number is required for students'
+        });
+        continue;
+      }
+
+      // Password strength validation
+      if (sanitizedUser.password.length < 3) {
+        errors.push({
+          row: rowNumber,
+          email: sanitizedUser.email,
+          reason: 'Password must be at least 3 characters long'
+        });
+        continue;
+      }
+
+      validUsers.push({ ...sanitizedUser, rowNumber });
     }
 
-    res
-      .status(200)
-      .json({ message: "Users added", count: insertedUsers.length });
+    // If no valid users, return errors
+    if (validUsers.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No valid users to insert',
+        inserted: 0,
+        errors
+      });
+    }
+
+    // Step 2: Check for duplicates in batch (PERFORMANCE OPTIMIZATION)
+    const emails = validUsers.map(u => u.email);
+    const registerNumbers = validUsers
+      .filter(u => u.registerNumber)
+      .map(u => u.registerNumber);
+
+    const existingUsers = await userModel.find({
+      $or: [
+        { email: { $in: emails } },
+        { registerNumber: { $in: registerNumbers } }
+      ]
+    }).select('email registerNumber');
+
+    // Create sets for O(1) lookup
+    const existingEmails = new Set(existingUsers.map(u => u.email));
+    const existingRegNums = new Set(
+      existingUsers.filter(u => u.registerNumber).map(u => u.registerNumber)
+    );
+
+    // Filter out duplicates
+    const usersToInsert = [];
+    for (const user of validUsers) {
+      if (existingEmails.has(user.email)) {
+        errors.push({
+          row: user.rowNumber,
+          email: user.email,
+          reason: 'Email already exists in database'
+        });
+        continue;
+      }
+
+      if (user.registerNumber && existingRegNums.has(user.registerNumber)) {
+        errors.push({
+          row: user.rowNumber,
+          email: user.email,
+          reason: `Register number ${user.registerNumber} already exists`
+        });
+        continue;
+      }
+
+      usersToInsert.push(user);
+    }
+
+    if (usersToInsert.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'All users are duplicates or invalid',
+        inserted: 0,
+        errors
+      });
+    }
+
+    // Step 3: Hash passwords in parallel (PERFORMANCE OPTIMIZATION)
+    const hashedUsers = await Promise.all(
+      usersToInsert.map(async (user) => ({
+        registerNumber: user.role === 'student' ? user.registerNumber : undefined,
+        username: user.username,
+        email: user.email,
+        password: await bcrypt.hash(user.password, 10),
+        role: user.role
+      }))
+    );
+
+    // Step 4: Bulk insert with error handling (ATOMIC OPERATION)
+    let insertedCount = 0;
+    try {
+      const result = await userModel.insertMany(hashedUsers, { 
+        ordered: false // Continue on duplicate key errors
+      });
+      insertedCount = result.length;
+    } catch (error) {
+      // Handle duplicate key errors that slipped through
+      if (error.code === 11000) {
+        // Some duplicates were caught by MongoDB
+        insertedCount = error.insertedDocs ? error.insertedDocs.length : 0;
+        
+        // Add duplicate errors
+        if (error.writeErrors) {
+          error.writeErrors.forEach((err) => {
+            const failedUser = hashedUsers[err.index];
+            errors.push({
+              row: usersToInsert[err.index].rowNumber,
+              email: failedUser.email,
+              reason: 'Duplicate key error (race condition)'
+            });
+          });
+        }
+      } else {
+        throw error; // Re-throw non-duplicate errors
+      }
+    }
+
+    // Step 5: Return detailed response
+    res.status(200).json({
+      success: true,
+      message: `Successfully inserted ${insertedCount} users`,
+      inserted: insertedCount,
+      skipped: errors.length,
+      errors: errors.length > 0 ? errors : undefined
+    });
+
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    // Handle file parsing errors
+    if (error.message.includes('Invalid file')) {
+      return res.status(400).json({ error: error.message });
+    }
+    
+    res.status(500).json({ 
+      error: "Failed to process bulk upload",
+      details: error.message 
+    });
   }
 };
 

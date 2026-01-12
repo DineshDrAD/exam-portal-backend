@@ -9,6 +9,9 @@ const {
   verifyToken,
   authorizeRoles,
 } = require("../middlewares/authMiddleware.js");
+const examSubmissionSchema = require("../models/examSubmissionSchema");
+const attemptCounterModel = require("../models/attemptCounterModel");
+const durationModel = require("../models/durationModel");
 
 const router = express.Router();
 
@@ -37,8 +40,6 @@ router.post(
   checkExamEligibility,
   async (req, res) => {
     try {
-      const examSubmissionSchema = require("../models/examSubmissionSchema");
-      const attemptCounterModel = require("../models/attemptCounterModel");
       const { userId } = req.body;
       const { _id: examId } = req.exam;
 
@@ -49,6 +50,22 @@ router.post(
         status: "started",
       });
 
+      // Get Duration Config
+      let allowedDuration = 3600; // Default 1 hour
+      const durationConfig = await durationModel.findById("duration-in-seconds");
+      
+      if (durationConfig) {
+        if (req.exam.level === 1) allowedDuration = durationConfig.level1Duration;
+        else if (req.exam.level === 2) allowedDuration = durationConfig.level2Duration;
+        else if (req.exam.level === 3) allowedDuration = durationConfig.level3Duration;
+        else if (req.exam.level === 4) allowedDuration = durationConfig.level4Duration;
+      }
+      
+      // Calculate total duration based on question count
+      // Logic from `AttendExamStudent.jsx` (questions.length * perQuestionDuration)
+      // This ensures server and client agree on the total time.
+      const totalDuration = req.exam.questions.length * allowedDuration;
+
       if (submission) {
         // Idempotent: Return existing started submission
         return res.status(200).json({
@@ -58,6 +75,7 @@ router.post(
           submissionId: submission._id,
           startTime: submission.createdAt,
           attemptNumber: submission.attemptNumber,
+          serverDuration: totalDuration, // Needed for frontend timer sync
         });
       }
 
@@ -85,6 +103,7 @@ router.post(
         submissionId: submission._id,
         startTime: submission.createdAt,
         attemptNumber: submission.attemptNumber,
+        serverDuration: totalDuration, // Needed for frontend timer sync
       });
     } catch (error) {
       // Handle duplicate key errors (unique constraint violations)
@@ -96,6 +115,17 @@ router.post(
           status: "started",
         });
 
+        // Get Duration Config (Repeated for error case)
+        let allowedDuration = 3600;
+        const durationConfig = await durationModel.findById("duration-in-seconds");
+        if (durationConfig) {
+           if (req.exam.level === 1) allowedDuration = durationConfig.level1Duration;
+           else if (req.exam.level === 2) allowedDuration = durationConfig.level2Duration;
+           else if (req.exam.level === 3) allowedDuration = durationConfig.level3Duration;
+           else if (req.exam.level === 4) allowedDuration = durationConfig.level4Duration;
+        }
+        const totalDuration = req.exam.questions.length * allowedDuration;
+
         if (existingSubmission) {
           return res.status(200).json({
             success: true,
@@ -104,6 +134,7 @@ router.post(
             submissionId: existingSubmission._id,
             startTime: existingSubmission.createdAt,
             attemptNumber: existingSubmission.attemptNumber,
+            serverDuration: totalDuration,
           });
         }
       }
