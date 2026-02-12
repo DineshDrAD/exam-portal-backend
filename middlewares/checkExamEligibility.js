@@ -10,7 +10,7 @@ const checkExamEligibility = async (req, res, next) => {
       .findOne({ examCode })
       .populate({
         path: "subject",
-        select: "name subtopics", 
+        select: "name subtopics",
       })
       .populate({
         path: "questions",
@@ -26,7 +26,7 @@ const checkExamEligibility = async (req, res, next) => {
     }
 
     const matchingSubtopic = exam.subject.subtopics.find(
-      (subtopic) => subtopic._id.toString() === exam.subTopic.toString()
+      (subtopic) => subtopic._id.toString() === exam.subTopic.toString(),
     );
 
     exam.subjectName = exam.subject.name;
@@ -41,37 +41,37 @@ const checkExamEligibility = async (req, res, next) => {
     });
 
     if (exam.level === 1 || userProgress) {
-      if (
-        exam.questionSelection &&
-        exam.questions &&
-        exam.questions.length > 0
-      ) {
-        const questionsByType = exam.questions.reduce((acc, question) => {
-          const type = question.questionType;
-          if (!acc[type]) {
-            acc[type] = [];
-          }
-          acc[type].push(question);
-          return acc;
-        }, {});
+      //  if (
+      //       exam.questionSelection &&
+      //       exam.questions &&
+      //       exam.questions.length > 0
+      //     ) {
+      //       const questionsByType = exam.questions.reduce((acc, question) => {
+      //         const type = question.questionType;
+      //         if (!acc[type]) {
+      //           acc[type] = [];
+      //         }
+      //         acc[type].push(question);
+      //         return acc;
+      //       }, {});
 
-        const selectedQuestions = [];
+      //       const selectedQuestions = [];
 
-        Object.keys(exam.questionSelection).forEach((questionType) => {
-          const typeQuestions = questionsByType[questionType] || [];
-          const { startIndex, count } = exam.questionSelection[questionType];
+      //       Object.keys(exam.questionSelection).forEach((questionType) => {
+      //         const typeQuestions = questionsByType[questionType] || [];
+      //         const { startIndex, count } = exam.questionSelection[questionType];
 
-          if (count > 0 && typeQuestions.length > startIndex) {
-            const selected = typeQuestions.slice(
-              startIndex,
-              startIndex + count
-            );
-            selectedQuestions.push(...selected);
-          }
-        });
+      //         if (count > 0 && typeQuestions.length > startIndex) {
+      //           const selected = typeQuestions.slice(
+      //             startIndex,
+      //             startIndex + count
+      //           );
+      //           selectedQuestions.push(...selected);
+      //         }
+      //       });
 
-        exam.questions = selectedQuestions;
-      }
+      //       exam.questions = selectedQuestions;
+      //     }
 
       req.exam = exam;
       return next();

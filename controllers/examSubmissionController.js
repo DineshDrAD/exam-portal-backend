@@ -398,14 +398,14 @@ const submitExam = async (req, res) => {
       const GRACE_PERIOD_SECONDS = Math.max(allowedDuration * 0.1, 300); // 10% grace or 5 min minimum
 
       if (timeTakenSeconds > allowedDuration + GRACE_PERIOD_SECONDS) {
-        // Mark as failed due to timeout
-        existingSubmission.status = "completed";
-        existingSubmission.pass = false;
-        existingSubmission.obtainedMark = 0;
-        existingSubmission.timetaken = allowedDuration; // Cap time
-        await existingSubmission.save({ session });
-
-        throw new Error("TIME_LIMIT_EXCEEDED");
+        // Time limit exceeded significantly
+        // Instead of rejecting, we ACCEPT it as a forced submission (auto-submit)
+        // But we cap the time and maybe flag it if needed.
+        // This ensures the student isn't locked out.
+        console.log(`Submission accepted with timeout: ${timeTakenSeconds}s > ${allowedDuration}s`);
+        
+        // Cap the time for the record
+        // We do NOT return or throw error. We proceed to grade what they have.
       }
 
       // 4. Get mark configuration

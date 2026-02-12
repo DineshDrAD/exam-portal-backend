@@ -17,6 +17,12 @@ const examSchema = new mongoose.Schema(
         ref: "Question",
       },
     ],
+    poolQuestions: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Question",
+      },
+    ],
     level: {
       type: Number,
       required: true,
@@ -57,6 +63,29 @@ const examSchema = new mongoose.Schema(
         startIndex: { type: Number, default: 0 },
         count: { type: Number, default: 0 },
       },
+    },
+    questionSets: [
+      {
+        name: { type: String, required: true },
+        selectionType: {
+          type: String,
+          enum: ["manual", "random"],
+          default: "manual",
+        },
+        questions: [{ type: mongoose.Schema.Types.ObjectId, ref: "Question" }], // For manual selection
+        count: { type: Number, default: 0 }, // For random selection
+        config: {
+          // For random selection criteria configuration per type
+          MCQ: { count: Number },
+          MSQ: { count: Number },
+          "Fill in the Blanks": { count: Number },
+          "Short Answer": { count: Number },
+        },
+      },
+    ],
+    activeQuestionSetId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
     },
   },
   {

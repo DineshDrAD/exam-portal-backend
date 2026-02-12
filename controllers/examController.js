@@ -37,6 +37,7 @@ const createExam = async (req, res) => {
       questions,
       passPercentage,
       questionSelection,
+      questionSets,
     } = req.body;
 
     if (
@@ -77,7 +78,75 @@ const createExam = async (req, res) => {
       );
 
       // 2. Create exam within session
-      await examModel.create(
+      // Process questionSets to map indices to created question IDs
+      const processedQuestionSets = (questionSets || []).map((set) => {
+        let setQuestions = [];
+        if (set.selectionType === "manual" && Array.isArray(set.questions)) {
+          // Map indices to created IDs
+          setQuestions = set.questions.map((index) => {
+            if (
+              typeof index === "number" &&
+              index >= 0 &&
+              index < createdQuestions.length
+            ) {
+              return createdQuestions[index]._id;
+            }
+            return null;
+          }).filter(id => id); // Filter out invalid mappings
+        }
+        return {
+          ...set,
+          questions: setQuestions,
+        };
+      });
+
+      // Determine questions for the active set
+      let activeQuestions = [];
+      let activeSetId = null;
+
+      // Helper to select random questions
+      const selectRandomQuestions = (pool, config) => {
+        let selected = [];
+        // Group pool by type
+        const poolByType = pool.reduce((acc, q) => {
+          if (!acc[q.questionType]) acc[q.questionType] = [];
+          acc[q.questionType].push(q._id);
+          return acc;
+        }, {});
+
+        // Select based on config
+        for (const [type, typeConfig] of Object.entries(config || {})) {
+          if (poolByType[type] && typeConfig.count > 0) {
+            const available = poolByType[type];
+            // Simple random shuffle and slice
+            const shuffled = available.sort(() => 0.5 - Math.random());
+            selected.push(...shuffled.slice(0, typeConfig.count));
+          }
+        }
+        return selected;
+      };
+
+      if (processedQuestionSets.length > 0) {
+        // If questionSets are present, use the specified active set index
+        const setIndex = req.body.activeQuestionSetIndex !== undefined ? req.body.activeQuestionSetIndex : 0;
+        const activeSet = processedQuestionSets[setIndex];
+        
+        if (activeSet) {
+             if (activeSet.selectionType === 'manual') {
+                 activeQuestions = activeSet.questions;
+             } else {
+                 activeQuestions = selectRandomQuestions(createdQuestions, activeSet.config);
+             }
+        } else {
+            // Fallback to all questions if set not found
+            activeQuestions = createdQuestions.map(q => q._id);
+        }
+      } else {
+          // Legacy/Default: All questions
+          activeQuestions = createdQuestions.map(q => q._id);
+      }
+
+      const examDocs = await examModel.create(
         [
           {
             subject,
@@ -86,7 +155,9 @@ const createExam = async (req, res) => {
             status,
             passPercentage: passPercentage || 90,
             examCode,
-            questions: createdQuestions.map((q) => q._id),
+            poolQuestions: createdQuestions.map((q) => q._id), // ALL QUESTIONS stored in pool
+            questions: activeQuestions, // ONLY ACTIVE questions for student view
+            questionSets: processedQuestionSets, 
             questionSelection: questionSelection || {
               MCQ: { startIndex: 0, count: 0 },
               MSQ: { startIndex: 0, count: 0 },
@@ -97,6 +168,17 @@ const createExam = async (req, res) => {
         ],
         { session }
       );
+      
+      const newExam = examDocs[0];
+      
+      // If we had sets, we need to set the activeQuestionSetId to the one we picked
+      if (processedQuestionSets.length > 0) {
+          const setIndex = req.body.activeQuestionSetIndex !== undefined ? req.body.activeQuestionSetIndex : 0;
+          if (newExam.questionSets[setIndex]) {
+              newExam.activeQuestionSetId = newExam.questionSets[setIndex]._id;
+              await newExam.save({ session });
+          }
+      }
     });
 
     // Fetch the created exam to return
@@ -120,7 +202,7 @@ const createExam = async (req, res) => {
 
 const getAllExams = async (req, res) => {
   try {
-    const exams = await examModel.find().populate("subject questions");
+    const exams = await examModel.find().populate("subject questions poolQuestions");
 
     const examsWithNames = await Promise.all(
       exams.map(async (exam) => {
@@ -138,6 +220,9 @@ const getAllExams = async (req, res) => {
           level: exam.level,
           status: exam.status,
           questions: exam.questions,
+          poolQuestions: exam.poolQuestions, // Return the full pool
+          questionSets: exam.questionSets, // ensuring questionSets are returned too (though likely already included in doc)
+          activeQuestionSetId: exam.activeQuestionSetId,
           passPercentage: exam.passPercentage,
           examCode: exam.examCode,
           shuffleQuestion: exam.shuffleQuestion,
@@ -314,7 +399,91 @@ const updateExam = async (req, res) => {
       }
 
       exam.passPercentage = passPercentage || exam.passPercentage || 90;
-      exam.questions = updatedQuestions;
+      
+      // Process questionSets
+      const questionSets = req.body.questionSets;
+      const activeQuestionSetId = req.body.activeQuestionSetId; 
+      
+      let processedQuestionSets = [];
+      let nextActiveQuestions = updatedQuestions; // Default to all if no sets
+      
+      // 1. ALL questions are added to the pool
+      const poolQuestions = updatedQuestions; // This is the comprehensive list of IDs
+
+      if (questionSets && Array.isArray(questionSets)) {
+          processedQuestionSets = questionSets.map((set) => {
+            let setQuestions = [];
+            if (set.selectionType === "manual" && Array.isArray(set.questions)) {
+              // Map indices to updatedQuestions IDs
+              // PRE-CONDITION: Frontend must send indices relative to the 'questions' array sent in THIS request
+              setQuestions = set.questions.map((index) => {
+                if (
+                  typeof index === "number" &&
+                  index >= 0 &&
+                  index < updatedQuestions.length
+                ) {
+                  return updatedQuestions[index];
+                }
+                return null;
+              }).filter(id => id);
+            }
+            return {
+              ...set,
+              questions: setQuestions,
+            };
+          });
+      }
+
+      // Logic to determine active questions based on activeQuestionSetId
+      const activeQuestionSetIndex = req.body.activeQuestionSetIndex;
+      
+      // Helper for random selection (duplicated from create for access within scope)
+       const selectRandomQuestions = (poolIds, config) => {
+        let selected = [];
+        const poolByType = {};
+        
+        // Use 'questions' from request body to map updatedQuestions (IDs) back to types
+        // req.body.questions contains the full list of question objects that matches updatedQuestions by index
+        updatedQuestions.forEach((id, idx) => {
+            const type = questions[idx].questionType; 
+            if (!poolByType[type]) poolByType[type] = [];
+            poolByType[type].push(id);
+        });
+
+        for (const [type, typeConfig] of Object.entries(config || {})) {
+          if (poolByType[type] && typeConfig.count > 0) {
+            const available = poolByType[type];
+            const shuffled = available.sort(() => 0.5 - Math.random());
+            selected.push(...shuffled.slice(0, typeConfig.count));
+          }
+        }
+        return selected;
+      };
+
+      if (processedQuestionSets.length > 0) {
+          let activeSet = null;
+          
+          if (activeQuestionSetIndex !== undefined && activeQuestionSetIndex >= 0 && activeQuestionSetIndex < processedQuestionSets.length) {
+              activeSet = processedQuestionSets[activeQuestionSetIndex];
+          } 
+          else if (activeQuestionSetId) {
+             activeSet = processedQuestionSets.find(s => s._id && s._id.toString() === activeQuestionSetId);
+          }
+          
+          if (activeSet) {
+             if (activeSet.selectionType === 'manual') {
+                 nextActiveQuestions = activeSet.questions;
+             } else {
+                 nextActiveQuestions = selectRandomQuestions(updatedQuestions, activeSet.config);
+             }
+          }
+      }
+
+      exam.passPercentage = passPercentage || exam.passPercentage || 90;
+      exam.poolQuestions = poolQuestions; // Store ALL questions in pool
+      exam.questions = nextActiveQuestions; // Store ACTIVE questions for student view
+      exam.questionSets = processedQuestionSets;
+      
       exam.questionSelection =
         questionSelection ||
         exam.questionSelection || {
@@ -325,6 +494,15 @@ const updateExam = async (req, res) => {
         };
 
       await exam.save({ session });
+      
+      // Update activeQuestionSetId if we used index
+      if (activeQuestionSetIndex !== undefined && exam.questionSets[activeQuestionSetIndex]) {
+          exam.activeQuestionSetId = exam.questionSets[activeQuestionSetIndex]._id;
+          await exam.save({ session });
+      } else if (activeQuestionSetId) {
+           exam.activeQuestionSetId = activeQuestionSetId;
+           await exam.save({ session });
+      }
     });
 
     res.status(200).json({
