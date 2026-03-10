@@ -144,7 +144,7 @@ const getAllExamsOverview = async (req, res) => {
     // Calculate overall statistics
     const totalStudents = examsData.reduce(
       (sum, exam) => sum + exam.totalSubmissions,
-      0
+      0,
     );
     const overallAvgScore =
       examsData.length > 0
@@ -206,7 +206,7 @@ const getExamDetailedAnalysis = async (req, res) => {
     // 2️⃣ Resolve exam-level subTopic manually
     const examSubTopic =
       exam.subject?.subtopics?.find(
-        (st) => st._id.toString() === exam.subTopic?.toString()
+        (st) => st._id.toString() === exam.subTopic?.toString(),
       ) || null;
 
     // 3️⃣ Fetch submissions
@@ -214,7 +214,7 @@ const getExamDetailedAnalysis = async (req, res) => {
       .populate("userId", "username email")
       .populate(
         "examData.questionId",
-        "question subTopic questionType correctAnswer"
+        "question subTopic questionType correctAnswer",
       )
       .lean();
 
@@ -235,15 +235,15 @@ const getExamDetailedAnalysis = async (req, res) => {
        B. PERFORMANCE DISTRIBUTION
     ======================= */
     const above75 = submissions.filter(
-      (s) => (s.obtainedMark / s.examData.length) * 100 > 75
+      (s) => (s.obtainedMark / s.examData.length) * 100 > 75,
     ).length;
     const between50_75 = submissions.filter(
       (s) =>
         (s.obtainedMark / s.examData.length) * 100 >= 50 &&
-        (s.obtainedMark / s.examData.length) * 100 <= 75
+        (s.obtainedMark / s.examData.length) * 100 <= 75,
     ).length;
     const below50 = submissions.filter(
-      (s) => (s.obtainedMark / s.examData.length) * 100 < 50
+      (s) => (s.obtainedMark / s.examData.length) * 100 < 50,
     ).length;
 
     const performanceDistribution = {
@@ -296,7 +296,7 @@ const getExamDetailedAnalysis = async (req, res) => {
 
         // 🔑 Resolve subtopic from subject
         const subTopicObj = exam.subject.subtopics.find(
-          (st) => st._id.toString() === subTopicId
+          (st) => st._id.toString() === subTopicId,
         );
 
         const subTopicName = subTopicObj?.name || "Unknown";
@@ -335,7 +335,7 @@ const getExamDetailedAnalysis = async (req, res) => {
        E. BEST & WORST SUBTOPICS
     ======================= */
     const sortedSubTopics = [...subTopicData].sort(
-      (a, b) => b.avgScore - a.avgScore
+      (a, b) => b.avgScore - a.avgScore,
     );
 
     const bestSubTopic = sortedSubTopics[0] || {
@@ -594,16 +594,18 @@ const getStudentDetailedAnalysis = async (req, res) => {
 
     const totalPercentageArray =
       submissions.length > 0
-        ? submissions.map((exam) => {
-            return (exam.obtainedMark / exam.examData.length) * 100;
-          })
+        ? submissions
+            .filter(
+              (exam) => exam.status === "completed" && exam.examData.length > 0,
+            )
+            .map((exam) => (exam.obtainedMark / exam.examData.length) * 100)
         : [];
 
     const avgPercentage =
       totalPercentageArray.length > 0
         ? totalPercentageArray.reduce(
             (sum, percentage) => sum + percentage,
-            0
+            0,
           ) / totalPercentageArray.length
         : 0;
 
@@ -617,11 +619,11 @@ const getStudentDetailedAnalysis = async (req, res) => {
         const total = subs.reduce((sum, sub) => sum + sub.obtainedMark, 0);
         const avg = subs.length > 0 ? total / subs.length : 0;
         return { studentId: s._id.toString(), avgScore: avg };
-      })
+      }),
     );
 
     const sortedStudents = allStudentScores.sort(
-      (a, b) => b.avgScore - a.avgScore
+      (a, b) => b.avgScore - a.avgScore,
     );
     const rank = sortedStudents.findIndex((s) => s.studentId === studentId) + 1;
 
@@ -699,53 +701,55 @@ const getStudentDetailedAnalysis = async (req, res) => {
       }
     };
 
-    const examSummary = submissions.map((sub) => {
-      let correct = 0;
-      let wrong = 0;
-      let partial = 0;
-      let skipped = 0;
+    const examSummary = submissions
+      .filter((sub) => sub.status === "completed" && sub.examData.length > 0)
+      .map((sub) => {
+        let correct = 0;
+        let wrong = 0;
+        let partial = 0;
+        let skipped = 0;
 
-      sub.examData.forEach((q) => {
-        if (q.isRight === "Correct") correct++;
-        else if (q.isRight === "Incorrect") wrong++;
-        else if (q.isRight === "Partially Correct") partial++;
-        else skipped++;
-      });
+        sub.examData.forEach((q) => {
+          if (q.isRight === "Correct") correct++;
+          else if (q.isRight === "Incorrect") wrong++;
+          else if (q.isRight === "Partially Correct") partial++;
+          else skipped++;
+        });
 
-      let subTopicName = "N/A";
+        let subTopicName = "N/A";
 
-      if (sub.examId?.subject?.subtopics?.length && sub.examId?.subTopic) {
-        const match = sub.examId.subject.subtopics.find(
-          (st) => st._id.toString() === sub.examId.subTopic.toString()
+        if (sub.examId?.subject?.subtopics?.length && sub.examId?.subTopic) {
+          const match = sub.examId.subject.subtopics.find(
+            (st) => st._id.toString() === sub.examId.subTopic.toString(),
+          );
+          if (match) subTopicName = match.name;
+        }
+
+        const positiveMark = getPositiveMarkForLevelSync(
+          sub.examId.level,
+          markData,
         );
-        if (match) subTopicName = match.name;
-      }
 
-      const positiveMark = getPositiveMarkForLevelSync(
-        sub.examId.level,
-        markData
-      );
+        const totalMarks = sub.examData.length * positiveMark;
 
-      const totalMarks = sub.examData.length * positiveMark;
+        const percentage =
+          totalMarks > 0
+            ? Number(((sub.obtainedMark / totalMarks) * 100).toFixed(2))
+            : 0;
 
-      const percentage =
-        totalMarks > 0
-          ? Number(((sub.obtainedMark / totalMarks) * 100).toFixed(2))
-          : 0;
-
-      return {
-        examId: sub.examId?._id,
-        subject: sub.examId?.subject?.name || "N/A",
-        subTopic: subTopicName || "N/A",
-        level: sub.examId?.level || "N/A",
-        totalQuestions: sub.examData.length,
-        correct,
-        wrong,
-        partial,
-        skipped,
-        percentage,
-      };
-    });
+        return {
+          examId: sub.examId?._id,
+          subject: sub.examId?.subject?.name || "N/A",
+          subTopic: subTopicName || "N/A",
+          level: sub.examId?.level || "N/A",
+          totalQuestions: sub.examData.length,
+          correct,
+          wrong,
+          partial,
+          skipped,
+          percentage,
+        };
+      });
 
     const groupedBySubject = {};
 
@@ -770,7 +774,7 @@ const getStudentDetailedAnalysis = async (req, res) => {
       ([subject, val]) => ({
         subject,
         percentage: val.total / val.count,
-      })
+      }),
     );
 
     // D. Attempt Summary
@@ -804,34 +808,34 @@ const getStudentDetailedAnalysis = async (req, res) => {
           (correctCount /
             (correctCount + inCorrectCount + skippedCount + partialMarkCount)) *
           100
-        ).toFixed(1)
+        ).toFixed(1),
       ),
       wrongPercentage: parseFloat(
         (
           (inCorrectCount /
             (correctCount + inCorrectCount + skippedCount + partialMarkCount)) *
           100
-        ).toFixed(1)
+        ).toFixed(1),
       ),
       skippedPercentage: parseFloat(
         (
           (skippedCount /
             (correctCount + inCorrectCount + skippedCount + partialMarkCount)) *
           100
-        ).toFixed(1)
+        ).toFixed(1),
       ),
       partialPercentage: parseFloat(
         (
           (partialMarkCount /
             (correctCount + inCorrectCount + skippedCount + partialMarkCount)) *
           100
-        ).toFixed(1)
+        ).toFixed(1),
       ),
     };
 
     // E. Key Insights
     const sortedSubjects = [...subjectChartData].sort(
-      (a, b) => b.percentage - a.percentage
+      (a, b) => b.percentage - a.percentage,
     );
 
     const strongestSubject = sortedSubjects[0] || {

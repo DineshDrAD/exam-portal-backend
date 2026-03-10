@@ -1,4 +1,5 @@
 const express = require("express");
+require("dotenv").config();
 const cookieParser = require("cookie-parser");
 const { connectWithRetry } = require("./config/db");
 const cors = require("cors");
@@ -32,7 +33,6 @@ if (cluster.isPrimary) {
     cluster.fork();
   });
 } else {
-  require("dotenv").config();
   app.use(cookieParser());
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
@@ -45,7 +45,7 @@ if (cluster.isPrimary) {
       credentials: true,
       methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization"],
-    })
+    }),
   );
 
   app.use(generalLimiter);
@@ -57,7 +57,7 @@ if (cluster.isPrimary) {
   app.use(
     "/api/exam-submission",
     submissionLimiter,
-    require("./routes/examSubmissionRoute")
+    require("./routes/examSubmissionRoute"),
   );
   app.use("/api/admin", require("./routes/adminRoute"));
   app.use("/api/review", require("./routes/reviewRoute"));

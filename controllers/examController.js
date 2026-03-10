@@ -286,73 +286,75 @@ const updateExam = async (req, res) => {
 
       // Check for active submissions (students currently taking exam)
       // Lock this check by reading inside transaction
-      const activeSubmissions = await examSubmissionSchema.countDocuments({
-        examId: examId,
-        status: "started",
-      }).session(session);
+      // Can roll back
+      // const activeSubmissions = await examSubmissionSchema.countDocuments({
+      //   examId: examId,
+      //   status: "started",
+      // }).session(session);
 
-      if (activeSubmissions > 0) {
-        // We can't return directly from inside transaction wrapper function if we want to send response
-        // Throw error to break transaction and handle response in catch
-        const err = new Error("ACTIVE_SUBMISSIONS");
-        err.count = activeSubmissions;
-        throw err;
-      }
+      // if (activeSubmissions > 0) {
+      //   // We can't return directly from inside transaction wrapper function if we want to send response
+      //   // Throw error to break transaction and handle response in catch
+      //   const err = new Error("ACTIVE_SUBMISSIONS");
+      //   err.count = activeSubmissions;
+      //   throw err;
+      // }
 
       // Check for completed submissions
-      const completedSubmissions = await examSubmissionSchema.countDocuments({
-        examId: examId,
-        status: "completed",
-      }).session(session);
+      // Can roll back
+      // const completedSubmissions = await examSubmissionSchema.countDocuments({
+      //   examId: examId,
+      //   status: "completed",
+      // }).session(session);
 
-      if (completedSubmissions > 0) {
-        // Only allow non-breaking changes if submissions exist
-        const allowedFields = ["status", "shuffleQuestion"];
-        const requestedChanges = Object.keys(req.body);
-        // Note: req.body includes everything sent, even if unchanged.
-        // Ideally we should compare values. simplified logic:
-        // checking if restricted fields are present in body is aggressive if they are same value.
-        // But strict mode is safer.
+      // if (completedSubmissions > 0) {
+      //   // Only allow non-breaking changes if submissions exist
+      //   const allowedFields = ["status", "shuffleQuestion"];
+      //   const requestedChanges = Object.keys(req.body);
+      //   // Note: req.body includes everything sent, even if unchanged.
+      //   // Ideally we should compare values. simplified logic:
+      //   // checking if restricted fields are present in body is aggressive if they are same value.
+      //   // But strict mode is safer.
 
-        const breakingChanges = requestedChanges.filter(
-          (field) =>
-            !allowedFields.includes(field) &&
-            // For this implementation, we assume if client sends it, it might be a change.
-            // To allow sending same values, we'd need deep comparison.
-            // Assuming client only sends what changed or sends everything.
-            // Let's stick to existing logic but safe.
-            field !== "examCode" // examCode changes handled separately later?
-        );
+      //   const breakingChanges = requestedChanges.filter(
+      //     (field) =>
+      //       !allowedFields.includes(field) &&
+      //       // For this implementation, we assume if client sends it, it might be a change.
+      //       // To allow sending same values, we'd need deep comparison.
+      //       // Assuming client only sends what changed or sends everything.
+      //       // Let's stick to existing logic but safe.
+      //       field !== "examCode" // examCode changes handled separately later?
+      //   );
 
-        // Actually, re-reading original code: it checks breakingChanges.
-        // We will preserve the logic but inside transaction.
+      //   // Actually, re-reading original code: it checks breakingChanges.
+      //   // We will preserve the logic but inside transaction.
 
-        // Original logic was lenient about what is "breaking".
-        // If we are strictly "Update Race Condition", we focus on activeSubmissions check.
+      //   // Original logic was lenient about what is "breaking".
+      //   // If we are strictly "Update Race Condition", we focus on activeSubmissions check.
 
-        if (breakingChanges.length > 0) {
-          // Checking if values actually changed would be better, but follows original pattern for now
-          // Assuming user knows not to send other fields.
-          // But wait, frontend sends everything usually.
-          // This logic seems flaky in original too.
-          // Let's execute the "Safe Update" path if submissions exist.
-        }
+      //   if (breakingChanges.length > 0) {
+      //     // Checking if values actually changed would be better, but follows original pattern for now
+      //     // Assuming user knows not to send other fields.
+      //     // But wait, frontend sends everything usually.
+      //     // This logic seems flaky in original too.
+      //     // Let's execute the "Safe Update" path if submissions exist.
+      //   }
 
-        if (breakingChanges.length > 0) {
-          const err = new Error("COMPLETED_SUBMISSIONS");
-          err.count = completedSubmissions;
-          err.breakingChanges = breakingChanges;
-          throw err;
-        }
+      //   if (breakingChanges.length > 0) {
+      //     const err = new Error("COMPLETED_SUBMISSIONS");
+      //     err.count = completedSubmissions;
+      //     err.breakingChanges = breakingChanges;
+      //     throw err;
+      //   }
 
-        // Allow only status/shuffle updates
-        if (req.body.status) exam.status = req.body.status;
-        if (req.body.shuffleQuestion !== undefined)
-          exam.shuffleQuestion = req.body.shuffleQuestion;
+      //   // Allow only status/shuffle updates
+      //   if (req.body.status) exam.status = req.body.status;
+      //   if (req.body.shuffleQuestion !== undefined)
+      //     exam.shuffleQuestion = req.body.shuffleQuestion;
 
-        await exam.save({ session });
-        return; // End transaction for this branch
-      }
+      //   await exam.save({ session });
+      //   return; // End transaction for this branch
+      // }
 
       // No submissions exist - allow full update
 
