@@ -1,30 +1,37 @@
 const mongoose = require("mongoose");
 
 /**
- * Execute a callback function within a MongoDB transaction
- * @param {Function} callback - Async function to execute within transaction
+ * Execute a callback function within a MongoDB transaction.
+ * Uses session.withTransaction() which automatically handles:
+ *  - startTransaction
+ *  - commitTransaction
+ *  - abortTransaction on error
+ *  - Retries on TransientTransactionError
+ *  - Retries on UnknownTransactionCommitResult
+ *
+ * @param {Function} callback - Async function(session) to execute within transaction
  * @returns {Promise} Result of the callback function
  */
 const withTransaction = async (callback) => {
   const session = await mongoose.startSession();
-  session.startTransaction();
 
   try {
-    const result = await callback(session);
-    await session.commitTransaction();
+    const result = await session.withTransaction(callback);
     return result;
-  } catch (error) {
-    await session.abortTransaction();
-    throw error;
   } finally {
+    // Always end the session whether transaction succeeded or failed
     session.endSession();
   }
 };
 
 /**
- * Retry a transaction on transient errors
- * @param {Function} callback - Async function to execute within transaction
- * @param {Number} maxRetries - Maximum number of retry attempts
+ * Retry a transaction on transient errors.
+ * NOTE: session.withTransaction() already handles TransientTransactionError
+ * and UnknownTransactionCommitResult retries internally. This wrapper exists
+ * for any additional application-level errors you want to retry on.
+ *
+ * @param {Function} callback - Async function(session) to execute within transaction
+ * @param {Number} maxRetries - Maximum number of retry attempts for app-level errors
  * @returns {Promise} Result of the callback function
  */
 const retryTransaction = async (callback, maxRetries = 3) => {
@@ -36,17 +43,25 @@ const retryTransaction = async (callback, maxRetries = 3) => {
     } catch (error) {
       lastError = error;
 
-      // Check if error is transient (can be retried)
+      // session.withTransaction() already handles MongoDB transient errors,
+      // so we only retry here on application-level transient errors if needed.
+      // If you have no custom app-level retryable errors, this will just throw
+      // on the first non-MongoDB-transient failure, which is correct behavior.
       const isTransientError =
-        error.hasOwnProperty("errorLabels") &&
-        error.errorLabels.includes("TransientTransactionError");
+        error.errorLabels &&
+        (error.errorLabels.includes("TransientTransactionError") ||
+          error.errorLabels.includes("UnknownTransactionCommitResult"));
 
       if (!isTransientError || attempt === maxRetries) {
         throw error;
       }
 
-      // Wait before retrying (exponential backoff)
+      // Exponential backoff before retrying
       const delay = Math.min(100 * Math.pow(2, attempt - 1), 1000);
+      console.warn(
+        `Transaction attempt ${attempt} failed with transient error. Retrying in ${delay}ms...`,
+        error.message,
+      );
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }

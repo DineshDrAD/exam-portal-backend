@@ -5,6 +5,26 @@ const examSubmissionSchema = require("../models/examSubmissionSchema");
 const userPassSchema = require("../models/userPassSchema");
 const { retryTransaction } = require("../utils/transactionHelper");
 
+const selectRandomQuestions = (pool, config, typeMap = null) => {
+  const poolByType = {};
+
+  pool.forEach((item, idx) => {
+    const type = item.questionType ?? (typeMap ? typeMap[idx] : undefined);
+    if (!type) return;
+    if (!poolByType[type]) poolByType[type] = [];
+    poolByType[type].push(item._id ?? item);
+  });
+
+  const selected = [];
+  for (const [type, typeConfig] of Object.entries(config || {})) {
+    if (poolByType[type] && typeConfig.count > 0) {
+      const shuffled = [...poolByType[type]].sort(() => 0.5 - Math.random());
+      selected.push(...shuffled.slice(0, typeConfig.count));
+    }
+  }
+  return selected;
+};
+
 const generateUniqueExamCode = async () => {
   const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   let examCode;
@@ -14,7 +34,7 @@ const generateUniqueExamCode = async () => {
     examCode = "";
     for (let i = 0; i < 6; i++) {
       examCode += characters.charAt(
-        Math.floor(Math.random() * characters.length)
+        Math.floor(Math.random() * characters.length),
       );
     }
 
@@ -60,9 +80,7 @@ const createExam = async (req, res) => {
 
     const examCode = await generateUniqueExamCode();
 
-    // Use transaction for atomicity
     await retryTransaction(async (session) => {
-      // 1. Create questions within session
       const createdQuestions = await questionModel.create(
         questions.map((question) => ({
           subject,
@@ -74,78 +92,78 @@ const createExam = async (req, res) => {
           correctAnswers: question.correctAnswers,
           image: question.image,
         })),
-        { session }
+        { session },
       );
 
-      // 2. Create exam within session
-      // Process questionSets to map indices to created question IDs
       const processedQuestionSets = (questionSets || []).map((set) => {
         let setQuestions = [];
+
         if (set.selectionType === "manual" && Array.isArray(set.questions)) {
-          // Map indices to created IDs
-          setQuestions = set.questions.map((index) => {
-            if (
-              typeof index === "number" &&
-              index >= 0 &&
-              index < createdQuestions.length
-            ) {
-              return createdQuestions[index]._id;
-            }
-            return null;
-          }).filter(id => id); // Filter out invalid mappings
+          setQuestions = set.questions
+            .map((index) => {
+              if (
+                typeof index === "number" &&
+                index >= 0 &&
+                index < createdQuestions.length
+              ) {
+                return createdQuestions[index]._id;
+              }
+              return null;
+            })
+            .filter(Boolean); // Remove any invalid mappings
         }
-        return {
-          ...set,
-          questions: setQuestions,
-        };
+
+        return { ...set, questions: setQuestions };
       });
 
-      // Determine questions for the active set
-      let activeQuestions = [];
-      let activeSetId = null;
+      const activeSetIndex =
+        req.body.activeQuestionSetIndex !== undefined
+          ? req.body.activeQuestionSetIndex
+          : 0;
 
-      // Helper to select random questions
       const selectRandomQuestions = (pool, config) => {
-        let selected = [];
-        // Group pool by type
         const poolByType = pool.reduce((acc, q) => {
           if (!acc[q.questionType]) acc[q.questionType] = [];
           acc[q.questionType].push(q._id);
           return acc;
         }, {});
 
-        // Select based on config
+        const selected = [];
         for (const [type, typeConfig] of Object.entries(config || {})) {
           if (poolByType[type] && typeConfig.count > 0) {
-            const available = poolByType[type];
-            // Simple random shuffle and slice
-            const shuffled = available.sort(() => 0.5 - Math.random());
+            const shuffled = [...poolByType[type]].sort(
+              () => 0.5 - Math.random(),
+            );
             selected.push(...shuffled.slice(0, typeConfig.count));
           }
         }
         return selected;
       };
 
+      let activeQuestions = [];
+
       if (processedQuestionSets.length > 0) {
-        // If questionSets are present, use the specified active set index
-        const setIndex = req.body.activeQuestionSetIndex !== undefined ? req.body.activeQuestionSetIndex : 0;
-        const activeSet = processedQuestionSets[setIndex];
-        
+        const activeSet = processedQuestionSets[activeSetIndex];
+
         if (activeSet) {
-             if (activeSet.selectionType === 'manual') {
-                 activeQuestions = activeSet.questions;
-             } else {
-                 activeQuestions = selectRandomQuestions(createdQuestions, activeSet.config);
-             }
+          if (activeSet.selectionType === "manual") {
+            activeQuestions = activeSet.questions;
+          } else {
+            activeQuestions = selectRandomQuestions(
+              createdQuestions,
+              activeSet.config,
+            );
+          }
         } else {
-            // Fallback to all questions if set not found
-            activeQuestions = createdQuestions.map(q => q._id);
+          // Fallback: use all questions if the specified set index doesn't exist
+          activeQuestions = createdQuestions.map((q) => q._id);
         }
       } else {
-          // Legacy/Default: All questions
-          activeQuestions = createdQuestions.map(q => q._id);
+        // No sets defined — use all questions (legacy / default behaviour)
+        activeQuestions = createdQuestions.map((q) => q._id);
       }
 
+      // 4. Create the exam document
       const examDocs = await examModel.create(
         [
           {
@@ -155,9 +173,9 @@ const createExam = async (req, res) => {
             status,
             passPercentage: passPercentage || 90,
             examCode,
-            poolQuestions: createdQuestions.map((q) => q._id), // ALL QUESTIONS stored in pool
-            questions: activeQuestions, // ONLY ACTIVE questions for student view
-            questionSets: processedQuestionSets, 
+            poolQuestions: createdQuestions.map((q) => q._id), // Full question pool
+            questions: activeQuestions, // Active questions only
+            questionSets: processedQuestionSets,
             questionSelection: questionSelection || {
               MCQ: { startIndex: 0, count: 0 },
               MSQ: { startIndex: 0, count: 0 },
@@ -166,33 +184,39 @@ const createExam = async (req, res) => {
             },
           },
         ],
-        { session }
+        { session },
       );
-      
+
       const newExam = examDocs[0];
-      
-      // If we had sets, we need to set the activeQuestionSetId to the one we picked
+
+      // 5. Set activeQuestionSetId if question sets are present
+      //    ✅ Use findByIdAndUpdate instead of newExam.save() to avoid
+      //       session/transaction-number mismatch on retries
       if (processedQuestionSets.length > 0) {
-          const setIndex = req.body.activeQuestionSetIndex !== undefined ? req.body.activeQuestionSetIndex : 0;
-          if (newExam.questionSets[setIndex]) {
-              newExam.activeQuestionSetId = newExam.questionSets[setIndex]._id;
-              await newExam.save({ session });
-          }
+        const activeSet = newExam.questionSets[activeSetIndex];
+        if (activeSet) {
+          await examModel.findByIdAndUpdate(
+            newExam._id,
+            { $set: { activeQuestionSetId: activeSet._id } },
+            { session, new: true },
+          );
+        }
       }
     });
 
-    // Fetch the created exam to return
+    // ── Fetch the fully-populated exam to return in the response ──────────────
     const createdExam = await examModel
       .findOne({ examCode })
       .populate("questions");
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: "Exam created successfully",
       data: createdExam,
     });
   } catch (error) {
-    res.status(500).json({
+    console.error("createExam error:", error);
+    return res.status(500).json({
       success: false,
       message: "Failed to create exam",
       error: error.message,
@@ -202,13 +226,15 @@ const createExam = async (req, res) => {
 
 const getAllExams = async (req, res) => {
   try {
-    const exams = await examModel.find().populate("subject questions poolQuestions");
+    const exams = await examModel
+      .find()
+      .populate("subject questions poolQuestions");
 
     const examsWithNames = await Promise.all(
       exams.map(async (exam) => {
         const subject = await Subject.findById(exam.subject);
         const subTopic = subject?.subtopics.find(
-          (sub) => sub._id.toString() === exam.subTopic.toString()
+          (sub) => sub._id.toString() === exam.subTopic.toString(),
         );
 
         return {
@@ -227,7 +253,7 @@ const getAllExams = async (req, res) => {
           examCode: exam.examCode,
           shuffleQuestion: exam.shuffleQuestion,
         };
-      })
+      }),
     );
 
     res.status(200).json(examsWithNames);
@@ -261,17 +287,19 @@ const updateExam = async (req, res) => {
       return res.status(400).json({ error: "All fields are required" });
     }
 
-    // Input Validation
     if (passPercentage < 0 || passPercentage > 100) {
-      return res.status(400).json({ error: "Pass percentage must be between 0 and 100" });
+      return res
+        .status(400)
+        .json({ error: "Pass percentage must be between 0 and 100" });
     }
 
     if (questions.length > 200) {
-      return res.status(400).json({ error: "Cannot add more than 200 questions to a single exam" });
+      return res
+        .status(400)
+        .json({ error: "Cannot add more than 200 questions to a single exam" });
     }
 
-    let exam = await examModel.findById(examId);
-
+    const exam = await examModel.findById(examId);
     if (!exam) {
       return res.status(404).json({
         success: false,
@@ -279,240 +307,187 @@ const updateExam = async (req, res) => {
       });
     }
 
-    // Execute update within a transaction to handle concurrency safely
     await retryTransaction(async (session) => {
-      // Re-fetch exam to ensure we have the latest version in this session
-      // (Though findById above was outside, locking here via examSubmission check is the key)
-
-      // Check for active submissions (students currently taking exam)
-      // Lock this check by reading inside transaction
-      // Can roll back
-      // const activeSubmissions = await examSubmissionSchema.countDocuments({
-      //   examId: examId,
-      //   status: "started",
-      // }).session(session);
-
-      // if (activeSubmissions > 0) {
-      //   // We can't return directly from inside transaction wrapper function if we want to send response
-      //   // Throw error to break transaction and handle response in catch
-      //   const err = new Error("ACTIVE_SUBMISSIONS");
-      //   err.count = activeSubmissions;
-      //   throw err;
-      // }
-
-      // Check for completed submissions
-      // Can roll back
-      // const completedSubmissions = await examSubmissionSchema.countDocuments({
-      //   examId: examId,
-      //   status: "completed",
-      // }).session(session);
-
-      // if (completedSubmissions > 0) {
-      //   // Only allow non-breaking changes if submissions exist
-      //   const allowedFields = ["status", "shuffleQuestion"];
-      //   const requestedChanges = Object.keys(req.body);
-      //   // Note: req.body includes everything sent, even if unchanged.
-      //   // Ideally we should compare values. simplified logic:
-      //   // checking if restricted fields are present in body is aggressive if they are same value.
-      //   // But strict mode is safer.
-
-      //   const breakingChanges = requestedChanges.filter(
-      //     (field) =>
-      //       !allowedFields.includes(field) &&
-      //       // For this implementation, we assume if client sends it, it might be a change.
-      //       // To allow sending same values, we'd need deep comparison.
-      //       // Assuming client only sends what changed or sends everything.
-      //       // Let's stick to existing logic but safe.
-      //       field !== "examCode" // examCode changes handled separately later?
-      //   );
-
-      //   // Actually, re-reading original code: it checks breakingChanges.
-      //   // We will preserve the logic but inside transaction.
-
-      //   // Original logic was lenient about what is "breaking".
-      //   // If we are strictly "Update Race Condition", we focus on activeSubmissions check.
-
-      //   if (breakingChanges.length > 0) {
-      //     // Checking if values actually changed would be better, but follows original pattern for now
-      //     // Assuming user knows not to send other fields.
-      //     // But wait, frontend sends everything usually.
-      //     // This logic seems flaky in original too.
-      //     // Let's execute the "Safe Update" path if submissions exist.
-      //   }
-
-      //   if (breakingChanges.length > 0) {
-      //     const err = new Error("COMPLETED_SUBMISSIONS");
-      //     err.count = completedSubmissions;
-      //     err.breakingChanges = breakingChanges;
-      //     throw err;
-      //   }
-
-      //   // Allow only status/shuffle updates
-      //   if (req.body.status) exam.status = req.body.status;
-      //   if (req.body.shuffleQuestion !== undefined)
-      //     exam.shuffleQuestion = req.body.shuffleQuestion;
-
-      //   await exam.save({ session });
-      //   return; // End transaction for this branch
-      // }
-
-      // No submissions exist - allow full update
-
-      // Validate exam code uniqueness if changed
+      // ── Validate exam code uniqueness if changed ──────────────────────────
       if (examCode && examCode !== exam.examCode) {
-        const duplicate = await examModel.findOne({ examCode }).session(session);
-        if (duplicate) {
-          throw new Error("DUPLICATE_EXAM_CODE");
-        }
-        exam.examCode = examCode;
+        const duplicate = await examModel
+          .findOne({ examCode })
+          .session(session);
+        if (duplicate) throw new Error("DUPLICATE_EXAM_CODE");
       }
 
-      const updatedQuestions = [];
+      // ── Upsert questions ──────────────────────────────────────────────────
+      // ✅ Use findByIdAndUpdate instead of existingQuestion.save({ session })
+      //    to avoid transaction number mismatches on retries.
+      const updatedQuestionIds = [];
 
       for (const question of questions) {
-        const existingQuestion = await questionModel.findOne({
-          questionText: question.questionText,
-          level,
-          subject,
-          subTopic,
-        }).session(session);
+        const existingQuestion = await questionModel
+          .findOne({
+            questionText: question.questionText,
+            level,
+            subject,
+            subTopic,
+          })
+          .session(session);
 
         if (existingQuestion) {
-          existingQuestion.questionType = question.questionType;
-          existingQuestion.options = question.options || existingQuestion.options;
-          existingQuestion.correctAnswers = question.correctAnswers;
-          existingQuestion.image = question.image || existingQuestion.image;
-
-          const updatedQuestion = await existingQuestion.save({ session });
-          updatedQuestions.push(updatedQuestion._id);
+          await questionModel.findByIdAndUpdate(
+            existingQuestion._id,
+            {
+              $set: {
+                questionType: question.questionType,
+                options: question.options ?? existingQuestion.options,
+                correctAnswers: question.correctAnswers,
+                image: question.image ?? existingQuestion.image,
+              },
+            },
+            { session },
+          );
+          updatedQuestionIds.push(existingQuestion._id);
         } else {
-          const newQuestion = await questionModel.create([{
+          const [newQuestion] = await questionModel.create(
+            [
+              {
+                subject,
+                subTopic,
+                level,
+                questionType: question.questionType,
+                questionText: question.questionText,
+                options: question.options,
+                correctAnswers: question.correctAnswers,
+                image: question.image,
+              },
+            ],
+            { session },
+          );
+          updatedQuestionIds.push(newQuestion._id);
+        }
+      }
+
+      // ── Process questionSets ──────────────────────────────────────────────
+      const incomingQuestionSets = req.body.questionSets;
+      const activeQuestionSetId = req.body.activeQuestionSetId;
+      const activeQuestionSetIndex = req.body.activeQuestionSetIndex;
+
+      let processedQuestionSets = [];
+
+      if (incomingQuestionSets && Array.isArray(incomingQuestionSets)) {
+        processedQuestionSets = incomingQuestionSets.map((set) => {
+          let setQuestions = [];
+          if (set.selectionType === "manual" && Array.isArray(set.questions)) {
+            setQuestions = set.questions
+              .map((index) =>
+                typeof index === "number" &&
+                index >= 0 &&
+                index < updatedQuestionIds.length
+                  ? updatedQuestionIds[index]
+                  : null,
+              )
+              .filter(Boolean);
+          }
+          return { ...set, questions: setQuestions };
+        });
+      }
+
+      // ── Determine active questions ────────────────────────────────────────
+      let nextActiveQuestions = updatedQuestionIds; // default: all questions
+
+      if (processedQuestionSets.length > 0) {
+        let activeSet = null;
+
+        if (
+          activeQuestionSetIndex !== undefined &&
+          activeQuestionSetIndex >= 0 &&
+          activeQuestionSetIndex < processedQuestionSets.length
+        ) {
+          activeSet = processedQuestionSets[activeQuestionSetIndex];
+        } else if (activeQuestionSetId) {
+          activeSet = processedQuestionSets.find(
+            (s) => s._id && s._id.toString() === activeQuestionSetId,
+          );
+        }
+
+        if (activeSet) {
+          if (activeSet.selectionType === "manual") {
+            nextActiveQuestions = activeSet.questions;
+          } else {
+            // typeMap lets selectRandomQuestions look up types by index
+            // since updatedQuestionIds are plain IDs, not full docs
+            const typeMap = questions.map((q) => q.questionType);
+            nextActiveQuestions = selectRandomQuestions(
+              updatedQuestionIds,
+              activeSet.config,
+              typeMap,
+            );
+          }
+        }
+      }
+
+      // ── Persist all changes atomically ────────────────────────────────────
+      // ✅ Single findByIdAndUpdate instead of multiple exam.save({ session }) calls
+      await examModel.findByIdAndUpdate(
+        examId,
+        {
+          $set: {
             subject,
             subTopic,
             level,
-            questionType: question.questionType,
-            questionText: question.questionText,
-            options: question.options,
-            correctAnswers: question.correctAnswers,
-            image: question.image,
-          }], { session });
-          updatedQuestions.push(newQuestion[0]._id);
-        }
-      }
+            status,
+            passPercentage: passPercentage || exam.passPercentage || 90,
+            ...(examCode ? { examCode } : {}),
+            poolQuestions: updatedQuestionIds,
+            questions: nextActiveQuestions,
+            questionSets: processedQuestionSets,
+            questionSelection: questionSelection ||
+              exam.questionSelection || {
+                MCQ: { startIndex: 0, count: 0 },
+                MSQ: { startIndex: 0, count: 0 },
+                "Fill in the Blanks": { startIndex: 0, count: 0 },
+                "Short Answer": { startIndex: 0, count: 0 },
+              },
+          },
+        },
+        { session },
+      );
 
-      exam.passPercentage = passPercentage || exam.passPercentage || 90;
-      
-      // Process questionSets
-      const questionSets = req.body.questionSets;
-      const activeQuestionSetId = req.body.activeQuestionSetId; 
-      
-      let processedQuestionSets = [];
-      let nextActiveQuestions = updatedQuestions; // Default to all if no sets
-      
-      // 1. ALL questions are added to the pool
-      const poolQuestions = updatedQuestions; // This is the comprehensive list of IDs
+      // ── Set activeQuestionSetId after subdoc _ids are assigned by Mongo ───
+      // Re-fetch within session to read the real subdoc _ids
+      const savedExam = await examModel.findById(examId).session(session);
 
-      if (questionSets && Array.isArray(questionSets)) {
-          processedQuestionSets = questionSets.map((set) => {
-            let setQuestions = [];
-            if (set.selectionType === "manual" && Array.isArray(set.questions)) {
-              // Map indices to updatedQuestions IDs
-              // PRE-CONDITION: Frontend must send indices relative to the 'questions' array sent in THIS request
-              setQuestions = set.questions.map((index) => {
-                if (
-                  typeof index === "number" &&
-                  index >= 0 &&
-                  index < updatedQuestions.length
-                ) {
-                  return updatedQuestions[index];
-                }
-                return null;
-              }).filter(id => id);
-            }
-            return {
-              ...set,
-              questions: setQuestions,
-            };
-          });
-      }
-
-      // Logic to determine active questions based on activeQuestionSetId
-      const activeQuestionSetIndex = req.body.activeQuestionSetIndex;
-      
-      // Helper for random selection (duplicated from create for access within scope)
-       const selectRandomQuestions = (poolIds, config) => {
-        let selected = [];
-        const poolByType = {};
-        
-        // Use 'questions' from request body to map updatedQuestions (IDs) back to types
-        // req.body.questions contains the full list of question objects that matches updatedQuestions by index
-        updatedQuestions.forEach((id, idx) => {
-            const type = questions[idx].questionType; 
-            if (!poolByType[type]) poolByType[type] = [];
-            poolByType[type].push(id);
-        });
-
-        for (const [type, typeConfig] of Object.entries(config || {})) {
-          if (poolByType[type] && typeConfig.count > 0) {
-            const available = poolByType[type];
-            const shuffled = available.sort(() => 0.5 - Math.random());
-            selected.push(...shuffled.slice(0, typeConfig.count));
-          }
-        }
-        return selected;
-      };
+      let resolvedActiveSetId = null;
 
       if (processedQuestionSets.length > 0) {
-          let activeSet = null;
-          
-          if (activeQuestionSetIndex !== undefined && activeQuestionSetIndex >= 0 && activeQuestionSetIndex < processedQuestionSets.length) {
-              activeSet = processedQuestionSets[activeQuestionSetIndex];
-          } 
-          else if (activeQuestionSetId) {
-             activeSet = processedQuestionSets.find(s => s._id && s._id.toString() === activeQuestionSetId);
-          }
-          
-          if (activeSet) {
-             if (activeSet.selectionType === 'manual') {
-                 nextActiveQuestions = activeSet.questions;
-             } else {
-                 nextActiveQuestions = selectRandomQuestions(updatedQuestions, activeSet.config);
-             }
-          }
+        if (
+          activeQuestionSetIndex !== undefined &&
+          savedExam.questionSets[activeQuestionSetIndex]
+        ) {
+          resolvedActiveSetId =
+            savedExam.questionSets[activeQuestionSetIndex]._id;
+        } else if (activeQuestionSetId) {
+          resolvedActiveSetId = activeQuestionSetId;
+        }
       }
 
-      exam.passPercentage = passPercentage || exam.passPercentage || 90;
-      exam.poolQuestions = poolQuestions; // Store ALL questions in pool
-      exam.questions = nextActiveQuestions; // Store ACTIVE questions for student view
-      exam.questionSets = processedQuestionSets;
-      
-      exam.questionSelection =
-        questionSelection ||
-        exam.questionSelection || {
-          MCQ: { startIndex: 0, count: 0 },
-          MSQ: { startIndex: 0, count: 0 },
-          "Fill in the Blanks": { startIndex: 0, count: 0 },
-          "Short Answer": { startIndex: 0, count: 0 },
-        };
-
-      await exam.save({ session });
-      
-      // Update activeQuestionSetId if we used index
-      if (activeQuestionSetIndex !== undefined && exam.questionSets[activeQuestionSetIndex]) {
-          exam.activeQuestionSetId = exam.questionSets[activeQuestionSetIndex]._id;
-          await exam.save({ session });
-      } else if (activeQuestionSetId) {
-           exam.activeQuestionSetId = activeQuestionSetId;
-           await exam.save({ session });
+      if (resolvedActiveSetId) {
+        await examModel.findByIdAndUpdate(
+          examId,
+          { $set: { activeQuestionSetId: resolvedActiveSetId } },
+          { session },
+        );
       }
     });
 
-    res.status(200).json({
+    const finalExam = await examModel.findById(examId).populate("questions");
+
+    return res.status(200).json({
       success: true,
       message: "Exam and questions updated successfully",
-      data: exam,
+      data: finalExam,
     });
   } catch (error) {
+    console.error("updateExam error:", error);
+
     if (error.message === "ACTIVE_SUBMISSIONS") {
       return res.status(400).json({
         success: false,
@@ -527,13 +502,12 @@ const updateExam = async (req, res) => {
       });
     }
     if (error.message === "DUPLICATE_EXAM_CODE") {
-      return res.status(409).json({
-        success: false,
-        message: "Exam code already exists",
-      });
+      return res
+        .status(409)
+        .json({ success: false, message: "Exam code already exists" });
     }
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Failed to update exam",
       error: error.message,
@@ -597,7 +571,7 @@ const getExamById = async (req, res) => {
     const examWithNames = async () => {
       const subject = await Subject.findById(exam.subject);
       const subTopic = subject?.subtopics.find(
-        (sub) => sub._id.toString() === exam.subTopic.toString()
+        (sub) => sub._id.toString() === exam.subTopic.toString(),
       );
 
       return {
@@ -638,7 +612,6 @@ const deleteExam = async (req, res) => {
         .json({ success: false, message: "Exam not found" });
     }
 
-    // Check for active submissions before allowing delete
     const activeSubmissions = await examSubmissionSchema.countDocuments({
       examId: id,
       status: "started",
@@ -651,37 +624,27 @@ const deleteExam = async (req, res) => {
       });
     }
 
-    // Delete exam and all related records in a transaction
     await retryTransaction(async (session) => {
-      // Delete all submissions for this exam
       await examSubmissionSchema.deleteMany({ examId: id }, { session });
-
-      // Delete all UserPass records for this exam
       await userPassSchema.deleteMany(
-        {
-          subject: exam.subject,
-          subTopic: exam.subTopic,
-          level: exam.level,
-        },
-        { session }
+        { subject: exam.subject, subTopic: exam.subTopic, level: exam.level },
+        { session },
       );
-
-      // Delete all questions
+      // ✅ Fixed: was exam.questions (active only) — must be exam.poolQuestions
+      //    to delete ALL questions, not just the active set
       await questionModel.deleteMany(
-        { _id: { $in: exam.questions } },
-        { session }
+        { _id: { $in: exam.poolQuestions } },
+        { session },
       );
-
-      // Delete the exam itself
       await examModel.findByIdAndDelete(id, { session });
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: "Exam and associated questions deleted successfully",
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Failed to delete exam",
       error: error.message,
