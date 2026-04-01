@@ -5,6 +5,40 @@ const examSubmissionSchema = require("../models/examSubmissionSchema");
 const userPassSchema = require("../models/userPassSchema");
 const { retryTransaction } = require("../utils/transactionHelper");
 
+/**
+ * For MCQ/MSQ: ensure correctAnswers contains only values
+ * that exist in the options array. Map labels like "A" to the
+ * matching option. Remove duplicates.
+ */
+const sanitizeCorrectAnswers = (question) => {
+  const { questionType, options, correctAnswers } = question;
+  if (
+    (questionType !== "MCQ" && questionType !== "MSQ") ||
+    !Array.isArray(options) ||
+    !Array.isArray(correctAnswers)
+  ) {
+    return correctAnswers || [];
+  }
+
+  const resolved = correctAnswers
+    .map((ans) => {
+      if (typeof ans !== "string") return null;
+      const trimmed = ans.trim();
+      // Direct match
+      if (options.includes(trimmed)) return trimmed;
+      // Label match: "A" → "A. Liquid limit"
+      const match = options.find(
+        (opt) =>
+          opt.split(".")[0].trim().toUpperCase() === trimmed.toUpperCase(),
+      );
+      return match || null;
+    })
+    .filter(Boolean);
+
+  // Deduplicate
+  return [...new Set(resolved)];
+};
+
 const selectRandomQuestions = (pool, config, typeMap = null) => {
   const poolByType = {};
 
@@ -89,7 +123,7 @@ const createExam = async (req, res) => {
           questionType: question.questionType,
           questionText: question.questionText,
           options: question.options,
-          correctAnswers: question.correctAnswers,
+          correctAnswers: sanitizeCorrectAnswers(question),
           image: question.image,
         })),
         { session },
@@ -338,7 +372,7 @@ const updateExam = async (req, res) => {
               $set: {
                 questionType: question.questionType,
                 options: question.options ?? existingQuestion.options,
-                correctAnswers: question.correctAnswers,
+                correctAnswers: sanitizeCorrectAnswers(question),
                 image: question.image ?? existingQuestion.image,
               },
             },
@@ -355,7 +389,7 @@ const updateExam = async (req, res) => {
                 questionType: question.questionType,
                 questionText: question.questionText,
                 options: question.options,
-                correctAnswers: question.correctAnswers,
+                correctAnswers: sanitizeCorrectAnswers(question),
                 image: question.image,
               },
             ],
