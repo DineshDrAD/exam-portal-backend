@@ -258,37 +258,74 @@ const createExam = async (req, res) => {
   }
 };
 
+// const getAllExams = async (req, res) => {
+//   try {
+//     const exams = await examModel
+//       .find()
+//       .populate("subject questions poolQuestions");
+
+//     const examsWithNames = await Promise.all(
+//       exams.map(async (exam) => {
+//         const subject = await Subject.findById(exam.subject);
+//         const subTopic = subject?.subtopics.find(
+//           (sub) => sub._id.toString() === exam.subTopic.toString(),
+//         );
+
+//         return {
+//           _id: exam._id,
+//           subject: subject?.name || "Unknown Subject",
+//           subjectId: subject?._id,
+//           subTopic: subTopic?.name || "Unknown Subtopic",
+//           subTopicId: subTopic._id,
+//           level: exam.level,
+//           status: exam.status,
+//           questions: exam.questions,
+//           poolQuestions: exam.poolQuestions, // Return the full pool
+//           questionSets: exam.questionSets, // ensuring questionSets are returned too (though likely already included in doc)
+//           activeQuestionSetId: exam.activeQuestionSetId,
+//           passPercentage: exam.passPercentage,
+//           examCode: exam.examCode,
+//           shuffleQuestion: exam.shuffleQuestion,
+//         };
+//       }),
+//     );
+
+//     res.status(200).json(examsWithNames);
+//   } catch (error) {
+//     res.status(500).json({ success: false, message: error.message });
+//   }
+// };
+
 const getAllExams = async (req, res) => {
   try {
     const exams = await examModel
       .find()
       .populate("subject questions poolQuestions");
 
-    const examsWithNames = await Promise.all(
-      exams.map(async (exam) => {
-        const subject = await Subject.findById(exam.subject);
-        const subTopic = subject?.subtopics.find(
-          (sub) => sub._id.toString() === exam.subTopic.toString(),
-        );
+    const examsWithNames = exams.map((exam) => {
+      const subject = exam.subject; // already populated, no extra DB call needed
 
-        return {
-          _id: exam._id,
-          subject: subject?.name || "Unknown Subject",
-          subjectId: subject?._id,
-          subTopic: subTopic?.name || "Unknown Subtopic",
-          subTopicId: subTopic._id,
-          level: exam.level,
-          status: exam.status,
-          questions: exam.questions,
-          poolQuestions: exam.poolQuestions, // Return the full pool
-          questionSets: exam.questionSets, // ensuring questionSets are returned too (though likely already included in doc)
-          activeQuestionSetId: exam.activeQuestionSetId,
-          passPercentage: exam.passPercentage,
-          examCode: exam.examCode,
-          shuffleQuestion: exam.shuffleQuestion,
-        };
-      }),
-    );
+      const subTopic = subject?.subtopics?.find(
+        (sub) => sub._id.toString() === exam.subTopic?.toString(),
+      );
+
+      return {
+        _id: exam._id,
+        subject: subject?.name || "Unknown Subject",
+        subjectId: subject?._id,
+        subTopic: subTopic?.name || "Unknown Subtopic",
+        subTopicId: subTopic?._id ?? null, // ← safe access
+        level: exam.level,
+        status: exam.status,
+        questions: exam.questions,
+        poolQuestions: exam.poolQuestions,
+        questionSets: exam.questionSets,
+        activeQuestionSetId: exam.activeQuestionSetId,
+        passPercentage: exam.passPercentage,
+        examCode: exam.examCode,
+        shuffleQuestion: exam.shuffleQuestion,
+      };
+    });
 
     res.status(200).json(examsWithNames);
   } catch (error) {

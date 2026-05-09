@@ -203,6 +203,13 @@ const getExamDetailedAnalysis = async (req, res) => {
       });
     }
 
+    if (!exam.subject) {
+      return res.status(422).json({
+        success: false,
+        message: `Exam "${exam.examCode}" references a deleted subject. Please reassign or remove this exam.`,
+      });
+    }
+
     // 2️⃣ Resolve exam-level subTopic manually
     const examSubTopic =
       exam.subject?.subtopics?.find(
@@ -291,6 +298,7 @@ const getExamDetailedAnalysis = async (req, res) => {
     submissions.forEach((sub) => {
       sub.examData.forEach((q) => {
         if (!q.questionId || !q.questionId.subTopic) return;
+        if (!exam.subject?.subtopics) return;
 
         const subTopicId = q.questionId.subTopic.toString();
 
