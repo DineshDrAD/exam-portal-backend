@@ -3,6 +3,8 @@ const questionModel = require("../models/questionModel");
 const Subject = require("../models/subjectModel");
 const examSubmissionSchema = require("../models/examSubmissionSchema");
 const userPassSchema = require("../models/userPassSchema");
+const attemptCounterModel = require("../models/attemptCounterModel");
+const reviewModel = require("../models/ReviewModel");
 const { retryTransaction } = require("../utils/transactionHelper");
 
 /**
@@ -683,36 +685,38 @@ const deleteExam = async (req, res) => {
         .json({ success: false, message: "Exam not found" });
     }
 
-    const activeSubmissions = await examSubmissionSchema.countDocuments({
-      examId: id,
-      status: "started",
-    });
-
-    if (activeSubmissions > 0) {
-      return res.status(400).json({
-        success: false,
-        message: `Cannot delete exam: ${activeSubmissions} student(s) currently taking it`,
-      });
-    }
-
     await retryTransaction(async (session) => {
+      // Delete all submissions for this exam (including in-progress ones)
       await examSubmissionSchema.deleteMany({ examId: id }, { session });
+
+      // Delete attempt counters for this exam
+      await attemptCounterModel.deleteMany({ examId: id }, { session });
+
+      // Delete level-pass records for the exam's subject/subTopic/level
       await userPassSchema.deleteMany(
         { subject: exam.subject, subTopic: exam.subTopic, level: exam.level },
         { session },
       );
-      // ✅ Fixed: was exam.questions (active only) — must be exam.poolQuestions
-      //    to delete ALL questions, not just the active set
+
+      // Delete review records for the exam's subject/subTopic/level
+      await reviewModel.deleteMany(
+        { subject: exam.subject, subTopic: exam.subTopic, level: exam.level },
+        { session },
+      );
+
+      // Delete ALL questions in the pool (not just the active set)
       await questionModel.deleteMany(
         { _id: { $in: exam.poolQuestions } },
         { session },
       );
+
+      // Finally, delete the exam itself
       await examModel.findByIdAndDelete(id, { session });
     });
 
     return res.status(200).json({
       success: true,
-      message: "Exam and associated questions deleted successfully",
+      message: "Exam and all associated data deleted successfully",
     });
   } catch (error) {
     return res.status(500).json({
