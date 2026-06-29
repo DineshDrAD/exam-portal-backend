@@ -225,6 +225,30 @@ const getExamDetailedAnalysis = async (req, res) => {
       )
       .lean();
 
+    // Fetch mark configuration
+    const markData = await markModel.findById("mark-based-on-levels");
+    if (!markData) {
+      throw new Error("Mark configuration not found");
+    }
+
+    // Helper function to get positive mark for level
+    const getPositiveMarkForLevel = (level) => {
+      switch (level) {
+        case 1:
+          return markData.level1Mark;
+        case 2:
+          return markData.level2Mark;
+        case 3:
+          return markData.level3Mark;
+        case 4:
+          return markData.level4Mark;
+        default:
+          return 1;
+      }
+    };
+
+    const positiveMark = getPositiveMarkForLevel(exam.level);
+
     /* =======================
        A. EXAM SUMMARY
     ======================= */
@@ -241,17 +265,21 @@ const getExamDetailedAnalysis = async (req, res) => {
     /* =======================
        B. PERFORMANCE DISTRIBUTION
     ======================= */
-    const above75 = submissions.filter(
-      (s) => (s.obtainedMark / s.examData.length) * 100 > 75,
-    ).length;
-    const between50_75 = submissions.filter(
-      (s) =>
-        (s.obtainedMark / s.examData.length) * 100 >= 50 &&
-        (s.obtainedMark / s.examData.length) * 100 <= 75,
-    ).length;
-    const below50 = submissions.filter(
-      (s) => (s.obtainedMark / s.examData.length) * 100 < 50,
-    ).length;
+    const above75 = submissions.filter((s) => {
+      const totalMarks = s.examData.length * positiveMark;
+      return totalMarks > 0 ? (s.obtainedMark / totalMarks) * 100 > 75 : false;
+    }).length;
+    
+    const between50_75 = submissions.filter((s) => {
+      const totalMarks = s.examData.length * positiveMark;
+      const percentage = totalMarks > 0 ? (s.obtainedMark / totalMarks) * 100 : 0;
+      return percentage >= 50 && percentage <= 75;
+    }).length;
+    
+    const below50 = submissions.filter((s) => {
+      const totalMarks = s.examData.length * positiveMark;
+      return totalMarks > 0 ? (s.obtainedMark / totalMarks) * 100 < 50 : true;
+    }).length;
 
     const performanceDistribution = {
       above75: {
@@ -419,128 +447,85 @@ const getAllStudentsOverview = async (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
     const skip = (page - 1) * limit;
 
-    // Single aggregation query instead of N+1
-    const [studentsData, totalCount] = await Promise.all([
-      User.aggregate([
-        { $match: { role: "student" } },
-        { $sort: { username: 1 } },
-        { $skip: skip },
-        { $limit: limit },
-        {
-          $lookup: {
-            from: "examsubmissions",
-            localField: "_id",
-            foreignField: "userId",
-            as: "submissions",
-          },
-        },
-        {
-          $project: {
-            _id: 1,
-            username: 1,
-            email: 1,
-            registerNumber: 1,
-            totalExams: { $size: "$submissions" },
-            passedExams: {
-              $size: {
-                $filter: {
-                  input: "$submissions",
-                  as: "sub",
-                  cond: { $eq: ["$$sub.pass", true] },
-                },
-              },
-            },
-            totalCorrect: {
-              $sum: {
-                $map: {
-                  input: "$submissions",
-                  as: "sub",
-                  in: {
-                    $size: {
-                      $filter: {
-                        input: "$$sub.examData",
-                        as: "q",
-                        cond: { $eq: ["$$q.isRight", "Correct"] },
-                      },
-                    },
-                  },
-                },
-              },
-            },
-            totalAttempted: {
-              $sum: {
-                $map: {
-                  input: "$submissions",
-                  as: "sub",
-                  in: { $size: "$$sub.examData" },
-                },
-              },
-            },
-            avgPercentage: {
-              $cond: {
-                if: { $gt: [{ $size: "$submissions" }, 0] },
-                then: {
-                  $avg: {
-                    $map: {
-                      input: "$submissions",
-                      as: "sub",
-                      in: {
-                        $cond: {
-                          if: { $gt: [{ $size: "$$sub.examData" }, 0] },
-                          then: {
-                            $multiply: [
-                              {
-                                $divide: [
-                                  "$$sub.obtainedMark",
-                                  { $size: "$$sub.examData" },
-                                ],
-                              },
-                              100,
-                            ],
-                          },
-                          else: 0,
-                        },
-                      },
-                    },
-                  },
-                },
-                else: 0,
-              },
-            },
-          },
-        },
-        {
-          $addFields: {
-            passRate: {
-              $cond: {
-                if: { $gt: ["$totalExams", 0] },
-                then: {
-                  $multiply: [
-                    { $divide: ["$passedExams", "$totalExams"] },
-                    100,
-                  ],
-                },
-                else: 0,
-              },
-            },
-          },
-        },
-        {
-          $project: {
-            _id: 1,
-            name: "$username",
-            email: 1,
-            registerNumber: 1,
-            totalExams: 1,
-            avgPercentage: { $round: ["$avgPercentage", 2] },
-            passRate: { $round: ["$passRate", 2] },
-            totalCorrect: 1,
-            totalAttempted: 1,
-          },
-        },
-      ]),
+    // Fetch mark configuration
+    const markData = await markModel.findById("mark-based-on-levels");
+    if (!markData) {
+      throw new Error("Mark configuration not found");
+    }
+
+    // Get all students with their submissions
+    const [allStudents, totalCount] = await Promise.all([
+      User.find({ role: "student" })
+        .sort({ username: 1 })
+        .skip(skip)
+        .limit(limit)
+        .select("_id username email registerNumber")
+        .lean(),
       User.countDocuments({ role: "student" }),
     ]);
+
+    // Process each student
+    const studentsData = await Promise.all(
+      allStudents.map(async (student) => {
+        const submissions = await ExamSubmission.find({ userId: student._id })
+          .populate("examId", "level")
+          .lean();
+
+        const totalExams = submissions.length;
+        const passedExams = submissions.filter((sub) => sub.pass === true).length;
+
+        let totalCorrect = 0;
+        let totalAttempted = 0;
+        let totalPercentage = 0;
+
+        submissions.forEach((sub) => {
+          if (sub.examId && sub.examData && sub.examData.length > 0) {
+            // Get positive mark for this exam's level
+            let positiveMark = 1;
+            switch (sub.examId.level) {
+              case 1:
+                positiveMark = markData.level1Mark;
+                break;
+              case 2:
+                positiveMark = markData.level2Mark;
+                break;
+              case 3:
+                positiveMark = markData.level3Mark;
+                break;
+              case 4:
+                positiveMark = markData.level4Mark;
+                break;
+            }
+
+            const totalMarks = sub.examData.length * positiveMark;
+            const percentage = totalMarks > 0 ? (sub.obtainedMark / totalMarks) * 100 : 0;
+            totalPercentage += percentage;
+
+            sub.examData.forEach((q) => {
+              totalAttempted++;
+              if (q.isRight === "Correct") {
+                totalCorrect++;
+              }
+            });
+          }
+        });
+
+        const avgPercentage = totalExams > 0 ? totalPercentage / totalExams : 0;
+        const passRate = totalExams > 0 ? (passedExams / totalExams) * 100 : 0;
+
+        return {
+          _id: student._id,
+          name: student.username,
+          email: student.email,
+          registerNumber: student.registerNumber,
+          totalExams,
+          avgPercentage: parseFloat(avgPercentage.toFixed(2)),
+          passRate: parseFloat(passRate.toFixed(2)),
+          totalCorrect,
+          totalAttempted,
+        };
+      })
+    );
 
     res.status(200).json({
       success: true,
@@ -600,13 +585,38 @@ const getStudentDetailedAnalysis = async (req, res) => {
       course: "Not specified", // Add course field to User model if needed
     };
 
+    // Fetch mark configuration for percentage calculation
+    const markData = await markModel.findById("mark-based-on-levels");
+    if (!markData) {
+      throw new Error("Mark configuration not found");
+    }
+
+    const getPositiveMarkForLevel = (level) => {
+      switch (level) {
+        case 1:
+          return markData.level1Mark;
+        case 2:
+          return markData.level2Mark;
+        case 3:
+          return markData.level3Mark;
+        case 4:
+          return markData.level4Mark;
+        default:
+          return 1;
+      }
+    };
+
     const totalPercentageArray =
       submissions.length > 0
         ? submissions
             .filter(
-              (exam) => exam.status === "completed" && exam.examData.length > 0,
+              (exam) => exam.status === "completed" && exam.examData.length > 0 && exam.examId,
             )
-            .map((exam) => (exam.obtainedMark / exam.examData.length) * 100)
+            .map((exam) => {
+              const positiveMark = getPositiveMarkForLevel(exam.examId.level);
+              const totalMarks = exam.examData.length * positiveMark;
+              return totalMarks > 0 ? (exam.obtainedMark / totalMarks) * 100 : 0;
+            })
         : [];
 
     const avgPercentage =
@@ -689,26 +699,6 @@ const getStudentDetailedAnalysis = async (req, res) => {
     });
 
     // C. Exam-wise Summary (NEW)
-    const markData = await markModel.findById("mark-based-on-levels");
-    if (!markData) {
-      throw new Error("Mark configuration not found");
-    }
-
-    const getPositiveMarkForLevelSync = (level, markData) => {
-      switch (level) {
-        case 1:
-          return markData.level1Mark;
-        case 2:
-          return markData.level2Mark;
-        case 3:
-          return markData.level3Mark;
-        case 4:
-          return markData.level4Mark;
-        default:
-          return 0;
-      }
-    };
-
     const examSummary = submissions
       .filter((sub) => sub.status === "completed" && sub.examData.length > 0)
       .map((sub) => {
@@ -733,10 +723,7 @@ const getStudentDetailedAnalysis = async (req, res) => {
           if (match) subTopicName = match.name;
         }
 
-        const positiveMark = getPositiveMarkForLevelSync(
-          sub.examId.level,
-          markData,
-        );
+        const positiveMark = getPositiveMarkForLevel(sub.examId.level);
 
         const totalMarks = sub.examData.length * positiveMark;
 

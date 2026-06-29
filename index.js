@@ -19,20 +19,20 @@ const numCPUs = availableParallelism();
 const PORT = process.env.PORT || 4000;
 const app = express();
 
-if (cluster.isPrimary) {
-  console.log(`Primary ${process.pid} is running`);
+// if (cluster.isPrimary) {
+//   console.log(`Primary ${process.pid} is running`);
 
-  // Fork workers for each available CPU core.
-  for (let i = 0; i < numCPUs; i++) {
-    cluster.fork();
-  }
+//   // Fork workers for each available CPU core.
+//   for (let i = 0; i < numCPUs; i++) {
+//     cluster.fork();
+//   }
 
-  // If a worker process dies, log it and fork a new one to replace it.
-  cluster.on("exit", (worker, code, signal) => {
-    console.log(`Worker ${worker.process.pid} died. Restarting...`);
-    cluster.fork();
-  });
-} else {
+//   // If a worker process dies, log it and fork a new one to replace it.
+//   cluster.on("exit", (worker, code, signal) => {
+//     console.log(`Worker ${worker.process.pid} died. Restarting...`);
+//     cluster.fork();
+//   });
+// } else {
   app.use(cookieParser());
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
@@ -98,6 +98,6 @@ if (cluster.isPrimary) {
     }
     process.exit(0);
   });
-}
+// }
 
 module.exports = app;
