@@ -128,7 +128,7 @@ const createExam = async (req, res) => {
           correctAnswers: sanitizeCorrectAnswers(question),
           image: question.image,
         })),
-        { session },
+        { session, ordered: true },
       );
 
       const processedQuestionSets = (questionSets || []).map((set) => {
@@ -220,7 +220,7 @@ const createExam = async (req, res) => {
             },
           },
         ],
-        { session },
+        { session, ordered: true },
       );
 
       const newExam = examDocs[0];
@@ -432,7 +432,7 @@ const updateExam = async (req, res) => {
                 image: question.image,
               },
             ],
-            { session },
+            { session, ordered: true },
           );
           updatedQuestionIds.push(newQuestion._id);
         }
