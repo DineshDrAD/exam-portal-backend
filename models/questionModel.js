@@ -26,7 +26,7 @@ const QuestionSchema = new mongoose.Schema(
       required: true,
     },
     options: {
-      type: [String], // Array of options (for MCQ & MSQ)
+      type: [mongoose.Schema.Types.Mixed], // Array of objects { text: String, image: String } or String (legacy)
       default: undefined, // Only needed for MCQ & MSQ
     },
     correctAnswers: {
@@ -34,6 +34,14 @@ const QuestionSchema = new mongoose.Schema(
       required: true,
     },
     image: {
+      type: String,
+      default: null,
+    },
+    answerKeyText: {
+      type: String,
+      default: null,
+    },
+    answerKeyImage: {
       type: String,
       default: null,
     },

@@ -26,14 +26,23 @@ const sanitizeCorrectAnswers = (question) => {
     .map((ans) => {
       if (typeof ans !== "string") return null;
       const trimmed = ans.trim();
+      
       // Direct match
-      if (options.includes(trimmed)) return trimmed;
+      const exactMatch = options.find((opt) => {
+        const text = typeof opt === "object" && opt !== null ? opt.text : opt;
+        return text === trimmed;
+      });
+      if (exactMatch) return trimmed;
+
       // Label match: "A" → "A. Liquid limit"
-      const match = options.find(
-        (opt) =>
-          opt.split(".")[0].trim().toUpperCase() === trimmed.toUpperCase(),
-      );
-      return match || null;
+      const labelMatch = options.find((opt) => {
+        const text = typeof opt === "object" && opt !== null ? opt.text : opt;
+        return typeof text === "string" && text.split(".")[0].trim().toUpperCase() === trimmed.toUpperCase();
+      });
+      if (labelMatch) {
+        return typeof labelMatch === "object" && labelMatch !== null ? labelMatch.text : labelMatch;
+      }
+      return null;
     })
     .filter(Boolean);
 
@@ -127,6 +136,8 @@ const createExam = async (req, res) => {
           options: question.options,
           correctAnswers: sanitizeCorrectAnswers(question),
           image: question.image,
+          answerKeyText: question.answerKeyText,
+          answerKeyImage: question.answerKeyImage,
         })),
         { session, ordered: true },
       );
@@ -413,6 +424,8 @@ const updateExam = async (req, res) => {
                 options: question.options ?? existingQuestion.options,
                 correctAnswers: sanitizeCorrectAnswers(question),
                 image: question.image ?? existingQuestion.image,
+                answerKeyText: question.answerKeyText ?? existingQuestion.answerKeyText,
+                answerKeyImage: question.answerKeyImage ?? existingQuestion.answerKeyImage,
               },
             },
             { session },
@@ -430,6 +443,8 @@ const updateExam = async (req, res) => {
                 options: question.options,
                 correctAnswers: sanitizeCorrectAnswers(question),
                 image: question.image,
+                answerKeyText: question.answerKeyText,
+                answerKeyImage: question.answerKeyImage,
               },
             ],
             { session, ordered: true },
